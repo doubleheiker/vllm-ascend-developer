@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "description": "Characterization trace of the current Markdown-orchestrated precision diagnosis loop.",
+  "steps": [
+    {
+      "id": "initialize",
+      "source": "workflows/precision-diagnosis.md",
+      "expected_scope": "unspecified",
+      "result": "configuration inspected"
+    },
+    {
+      "id": "release-port",
+      "source": "modules/service.md",
+      "expected_scope": "remote-host",
+      "result": "service port is free"
+    },
+    {
+      "id": "start-service",
+      "source": "modules/service.md",
+      "expected_scope": "container",
+      "result": "startup command submitted"
+    },
+    {
+      "id": "health-check",
+      "source": "modules/service.md",
+      "expected_scope": "container",
+      "result": "HTTP 200 from /v1/models"
+    },
+    {
+      "id": "smoke-test",
+      "source": "modules/test-runner.md",
+      "expected_scope": "container",
+      "result": "inference response captured"
+    },
+    {
+      "id": "verify",
+      "source": "modules/verifier.md",
+      "expected_scope": "local-agent",
+      "result": "actual output compared with expected output"
+    },
+    {
+      "id": "diagnose",
+      "source": "modules/log-analyzer.md",
+      "expected_scope": "mixed",
+      "result": "suspected vllm-ascend code located"
+    },
+    {
+      "id": "patch",
+      "source": "modules/auto-fixer.md",
+      "expected_scope": "remote-host",
+      "result": "vllm-ascend changed and fix_N.md recorded"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "scenario": "Local diagnosis artifacts must stay under the project-owned artifact directory.",
+  "project_root": "/workspace/project",
+  "artifact_root": "/workspace/project/.vllm-ascend",
+  "cases": [
+    {
+      "path": "/workspace/project/.vllm-ascend/runs/run-001/state.json",
+      "expected_decision": "allow"
+    },
+    {
+      "path": "/workspace/project/modules/session-debug.md",
+      "expected_decision": "deny"
+    },
+    {
+      "path": "/workspace/other-project/debug.md",
+      "expected_decision": "deny"
+    },
+    {
+      "path": "/tmp/vllm-debug-result.md",
+      "expected_decision": "deny"
+    }
+  ]
+}

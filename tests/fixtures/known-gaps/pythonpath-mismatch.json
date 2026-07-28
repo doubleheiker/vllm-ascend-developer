@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "scenario": "Container imports installed packages instead of the mounted source trees.",
+  "container": {
+    "python": "/usr/bin/python3",
+    "expected_imports": {
+      "vllm": "/workspace/vllm/vllm/__init__.py",
+      "vllm_ascend": "/workspace/vllm-ascend/vllm_ascend/__init__.py"
+    },
+    "observed_imports": {
+      "vllm": "/usr/local/lib/python3.11/site-packages/vllm/__init__.py",
+      "vllm_ascend": "/usr/local/lib/python3.11/site-packages/vllm_ascend/__init__.py"
+    }
+  },
+  "expected_outcome": {
+    "state": "PREFLIGHT_FAILED",
+    "code": "PYTHON_IMPORT_PATH_MISMATCH",
+    "remote_mutation_allowed": false
+  }
+}

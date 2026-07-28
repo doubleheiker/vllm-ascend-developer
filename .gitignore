@@ -1,0 +1,13 @@
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Generated request scripts and local diagnostics
+scripts/curl_test.sh
+layer_output.log
+fix_*.md
+
+# Local environment configuration and future run artifacts
+config/*.local.yaml
+config/*.local.yml
+.vllm-ascend/

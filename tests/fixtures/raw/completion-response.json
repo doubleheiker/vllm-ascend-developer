@@ -1,0 +1,11 @@
+{
+  "id": "cmpl-baseline",
+  "object": "text_completion",
+  "choices": [
+    {
+      "index": 0,
+      "text": " expected continuation",
+      "finish_reason": "length"
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+07/27 09:00:00 - AISBench - INFO - Task [vllm-api-general-chat/GSM8K]: {'accuracy': 83.0, 'type': 'GEN'}
+07/27 09:00:01 - AISBench - INFO - write summary to /home/outputs/default/20260727_090000/summary/summary_20260727_090000.txt

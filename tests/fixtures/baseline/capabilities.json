@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "capabilities": [
+    {
+      "id": "standalone-service-lifecycle",
+      "evidence": [
+        {
+          "path": "modules/service.md",
+          "markers": [
+            "单机模式流程（standalone）",
+            "Application startup complete",
+            "/v1/models"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pd-separated-service-lifecycle",
+      "evidence": [
+        {
+          "path": "modules/service.md",
+          "markers": [
+            "PD分离模式流程（pd-separated）",
+            "pd-separated.p[0]",
+            "pd-separated.d[0]"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "yaml-driven-test-generation",
+      "evidence": [
+        {
+          "path": "scripts/generate_curl.py",
+          "markers": [
+            "config/test.yaml",
+            "--test-index",
+            "--prompt-index"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "three-result-comparison-modes",
+      "evidence": [
+        {
+          "path": "modules/verifier.md",
+          "markers": [
+            "exact",
+            "contains",
+            "regex"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aisbench-evaluation",
+      "evidence": [
+        {
+          "path": "modules/aisbench-evaluator.md",
+          "markers": [
+            "GSM8K",
+            "GPQA",
+            "accuracy"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "service-and-plog-analysis",
+      "evidence": [
+        {
+          "path": "modules/log-analyzer.md",
+          "markers": [
+            "服务日志",
+            "测试日志",
+            "/root/ascend/log/debug/plog/"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "vllm-read-only-boundary",
+      "evidence": [
+        {
+          "path": "modules/auto-fixer.md",
+          "markers": [
+            "只修改 `vllm-ascend` 代码",
+            "禁止修改 `vllm` 代码",
+            "fix_N.md"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "remote-node-resolution",
+      "evidence": [
+        {
+          "path": "scripts/ssh_utils.py",
+          "markers": [
+            "standalone",
+            "pd-separated.p[0]",
+            "pd-separated.d[1]",
+            "\"eval\""
+          ]
+        }
+      ]
+    }
+  ]
+}

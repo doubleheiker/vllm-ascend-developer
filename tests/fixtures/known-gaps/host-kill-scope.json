@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "scenario": "The service port must be released on the remote host, never from inside the container.",
+  "cases": [
+    {
+      "id": "host-release-port",
+      "execution_scope": "remote-host",
+      "command": "fuser -k 8080/tcp",
+      "expected_decision": "allow"
+    },
+    {
+      "id": "container-release-port",
+      "execution_scope": "container",
+      "command": "docker exec vllm-ascend-dev fuser -k 8080/tcp",
+      "expected_decision": "deny"
+    },
+    {
+      "id": "ambiguous-process-kill",
+      "execution_scope": "remote-host",
+      "command": "pkill -9 python",
+      "expected_decision": "deny"
+    }
+  ]
+}
