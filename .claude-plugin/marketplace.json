@@ -1,0 +1,14 @@
+{
+  "name": "vllm-ascend-tools",
+  "owner": {
+    "name": "doubleheiker"
+  },
+  "description": "Claude Code plugins for vLLM-Ascend development and precision diagnosis.",
+  "plugins": [
+    {
+      "name": "vllm-ascend-developer",
+      "source": "./",
+      "description": "Develop and diagnose vLLM and vLLM-Ascend inference services and precision issues on Ascend NPUs."
+    }
+  ]
+}

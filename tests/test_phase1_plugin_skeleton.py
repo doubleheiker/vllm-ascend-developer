@@ -30,7 +30,6 @@ class PluginSkeletonTests(unittest.TestCase):
             manifest,
             {
                 "name": "vllm-ascend-developer",
-                "version": "0.1.0",
                 "description": (
                     "Develop and diagnose vLLM and vLLM-Ascend inference "
                     "services and precision issues on Ascend NPUs."
@@ -39,8 +38,41 @@ class PluginSkeletonTests(unittest.TestCase):
         )
         self.assertEqual(
             sorted(path.name for path in manifest_path.parent.iterdir()),
-            ["plugin.json"],
+            ["marketplace.json", "plugin.json"],
         )
+
+    def test_marketplace_publishes_plugin_from_repository_root(self):
+        marketplace = json.loads(
+            (
+                ROOT / ".claude-plugin" / "marketplace.json"
+            ).read_text(encoding="utf-8")
+        )
+        plugin_manifest = json.loads(
+            (
+                ROOT / ".claude-plugin" / "plugin.json"
+            ).read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(marketplace["name"], "vllm-ascend-tools")
+        self.assertEqual(marketplace["owner"], {"name": "doubleheiker"})
+        self.assertTrue(marketplace["description"])
+        self.assertEqual(len(marketplace["plugins"]), 1)
+
+        published_plugin = marketplace["plugins"][0]
+        self.assertEqual(published_plugin["name"], plugin_manifest["name"])
+        self.assertEqual(published_plugin["source"], "./")
+        self.assertTrue(published_plugin["description"])
+        self.assertNotIn("version", published_plugin)
+        self.assertEqual((ROOT / published_plugin["source"]).resolve(), ROOT)
+
+    def test_git_commit_controls_development_plugin_version(self):
+        manifest = json.loads(
+            (
+                ROOT / ".claude-plugin" / "plugin.json"
+            ).read_text(encoding="utf-8")
+        )
+
+        self.assertNotIn("version", manifest)
 
     def test_namespaced_diagnose_skill_exists(self):
         plugin_skill = ROOT / "skills" / "diagnose" / "SKILL.md"

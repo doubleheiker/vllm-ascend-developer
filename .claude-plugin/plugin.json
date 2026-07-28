@@ -1,5 +1,4 @@
 {
   "name": "vllm-ascend-developer",
-  "version": "0.1.0",
   "description": "Develop and diagnose vLLM and vLLM-Ascend inference services and precision issues on Ascend NPUs."
 }
