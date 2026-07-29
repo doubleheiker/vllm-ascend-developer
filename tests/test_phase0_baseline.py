@@ -120,16 +120,15 @@ class KnownGapContractTests(unittest.TestCase):
         self.assertIn("release_service_port", source)
         self.assertIn("remote-host", source)
 
-    @unittest.expectedFailure
     def test_workspace_write_boundary_is_machine_enforced(self):
-        hook_config = ROOT / "hooks" / "hooks.json"
-        hook_guard = ROOT / "scripts" / "hook_guard.py"
-        self.assertTrue(hook_config.is_file())
-        self.assertTrue(hook_guard.is_file())
-        self.assertIn(
-            ".vllm-ascend",
-            hook_guard.read_text(encoding="utf-8"),
-        )
+        path_policy = ROOT / "scripts" / "path_policy.py"
+        plugin_skill = ROOT / "skills" / "diagnose" / "SKILL.md"
+        self.assertTrue(path_policy.is_file())
+        policy_source = path_policy.read_text(encoding="utf-8")
+        skill_source = plugin_skill.read_text(encoding="utf-8")
+        self.assertIn(".vllm-ascend", policy_source)
+        self.assertIn("PreToolUse", skill_source)
+        self.assertIn('matcher: "Write|Edit|Bash"', skill_source)
 
     @unittest.expectedFailure
     def test_persistent_workflow_runner_is_implemented(self):

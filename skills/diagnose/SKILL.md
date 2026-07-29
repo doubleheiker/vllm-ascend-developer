@@ -1,6 +1,14 @@
 ---
 name: diagnose
 description: vLLM/vLLM-Ascend 通用开发 skill，覆盖精度诊断、服务管理、测试验证等场景，支持单机/PD分离双模式
+disable-model-invocation: true
+hooks:
+  PreToolUse:
+    - matcher: "Write|Edit|Bash"
+      hooks:
+        - type: command
+          command: 'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/path_policy.py" hook'
+          timeout: 10
 ---
 
 # vllm-ascend-developer — vLLM Ascend 开发 Skill
@@ -8,6 +16,21 @@ description: vLLM/vLLM-Ascend 通用开发 skill，覆盖精度诊断、服务�
 ## 概述
 
 本 skill 用于 vLLM + vLLM-Ascend 框架下的开发与调试工作，覆盖推理精度诊断、服务管理、自动化测试与代码修复等场景。采用模块化设计，支持单机和PD分离两种部署模式。
+
+## 本地路径安全
+
+Plugin 安装目录 `${CLAUDE_PLUGIN_ROOT}` 只读。所有本地配置和运行结果只能写入用户项目 `${CLAUDE_PROJECT_DIR}/.vllm-ascend/`。
+
+开始一次会产生文件的诊断前，先初始化唯一运行目录：
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/path_policy.py" \
+  --project-root "${CLAUDE_PROJECT_DIR}" init-run
+```
+
+保存命令返回的 `run_dir`，本轮生成脚本写入 `generated/`、下载文件写入 `downloads/`、日志写入 `logs/`、修复记录写入 `records/`。禁止在 Plugin 源目录、workspace 外或未激活的 run 中生成文件。Hook 拒绝操作时，用中文解释原因，不要通过其他工具或命令绕过。
+
+初始化时会创建 `${CLAUDE_PROJECT_DIR}/.vllm-ascend/.gitignore`，统一忽略项目私有配置、凭据、daemon 状态和全部运行产物。
 
 ## 目录结构
 
@@ -23,7 +46,7 @@ skills/vllm-ascend-developer/
 ├── scripts/                        # 工具脚本
 │   ├── ssh_utils.py                # SSH 远程执行（exec/wait/upload/download）
 │   ├── generate_curl.py            # 从 config/test.yaml 生成 curl 测试脚本
-│   └── curl_test.sh                # 自动生成的 curl 测试脚本（不要手动编辑）
+│   └── path_policy.py              # 运行目录与 PreToolUse 路径安全策略
 ├── docs/                           # 经验文档（调试方法、定位案例）
 │   ├── dcp2tp4-precision-fix.md    # DCP 精度调试：逐层对比、float64 merge
 │   └── pcp-hybrid-nan-fix.md       # PCP NaN：bool mask fill_() 不写回
@@ -42,13 +65,13 @@ skills/vllm-ascend-developer/
 
 ### 第零步：环境初始化
 
-首次使用前，安装 `scripts/ssh_utils.py` 的 Python 依赖：
+首次使用前，请用户在受控 Python 环境的终端中手动安装 `scripts/ssh_utils.py` 的依赖。诊断 Skill 激活期间的安全 Hook 会拒绝 `pip` 等会写入 workspace 外的包管理命令，不会代替用户修改 Python 环境。
 
 ```bash
 pip install paramiko pyyaml -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
-验证安装：
+在用户终端中验证安装：
 
 ```bash
 python -c "import paramiko, yaml; print('ok')"
@@ -59,17 +82,24 @@ python -c "import paramiko, yaml; print('ok')"
 
 ### 第一步：配置环境
 
-根据自己的实际环境，修改以下配置文件：
+Plugin 中的 `${CLAUDE_PLUGIN_ROOT}/config/*.yaml` 是只读模板。首次使用时，将模板复制到项目私有目录，真实密码和路径只写入该目录：
 
-1. **`config/service.yaml`** — 设置部署模式（standalone/pd-separated）、服务器连接、Docker 配置
-2. **`config/test.yaml`** — 设置测试用例列表（端点、请求参数、prompt、预期输出）
-3. **`config/model.yaml`** — 设置模型路径和源码路径
-4. **`config/aisbench.yaml`** — 【可选】设置精度数据集评测参数
-5. **`config/proxy.yaml`** — 【可选】设置网络代理，用于 pip 安装和 git clone
+```bash
+cp -n "${CLAUDE_PLUGIN_ROOT}/config/"*.yaml \
+  "${CLAUDE_PROJECT_DIR}/.vllm-ascend/config/"
+```
+
+根据实际环境修改：
+
+1. **`${CLAUDE_PROJECT_DIR}/.vllm-ascend/config/service.yaml`** — 部署模式、服务器连接、Docker 配置
+2. **`${CLAUDE_PROJECT_DIR}/.vllm-ascend/config/test.yaml`** — 测试用例、请求参数、prompt、预期输出
+3. **`${CLAUDE_PROJECT_DIR}/.vllm-ascend/config/model.yaml`** — 模型路径和源码路径
+4. **`${CLAUDE_PROJECT_DIR}/.vllm-ascend/config/aisbench.yaml`** — 【可选】精度数据集评测参数
+5. **`${CLAUDE_PROJECT_DIR}/.vllm-ascend/config/proxy.yaml`** — 【可选】网络代理
 
 ### 第二步：执行精度诊断工作流
 
-按照 `workflows/precision-diagnosis.md` 中的步骤执行：
+读取 `${CLAUDE_PLUGIN_ROOT}/workflows/precision-diagnosis.md`，按照其中步骤执行：
 
 1. 初始化配置检查
 2. 启动服务 → 确保服务就绪
@@ -79,7 +109,7 @@ python -c "import paramiko, yaml; print('ok')"
 
 ### 第三步：查看修复记录
 
-每次修复迭代记录在 `fix_N.md` 文件中，N 从 1 递增。
+每次修复迭代记录在 `{run_dir}/records/fix_N.md`，N 从 1 递增。
 
 ---
 
@@ -158,15 +188,15 @@ pd-separated:
 
 1. **只修改 vllm-ascend 代码** — 禁止修改 vLLM 源码
 2. **每个 ssh_utils exec 命令独立执行** — 不同 exec 调用之间不可用 `&&` 链式连接。`docker exec bash -c '...'` 内部的命令可以用 `;` 分隔（不用 `&&`，因为 `&&` 依赖前一个命令的退出码，可能导致后续命令被跳过）
-3. **SSH 远程操作** — 所有远程命令统一通过 `scripts/ssh_utils.py` 执行，首次调用自动建立持久连接（Paramiko daemon），后续命令复用同一连接。参考：`python scripts/ssh_utils.py exec standalone "..."`
+3. **SSH 远程操作** — 所有远程命令统一通过 `${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py` 执行，首次调用自动建立持久连接（Paramiko daemon），后续命令复用同一连接。参考：`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "..."`
 4. **禁止擅自重装** — vLLM 和 vLLM-Ascend 已在容器内预装，未经用户同意禁止执行 `pip install` 等安装/覆盖操作
 5. **按端口杀进程** — 使用 `fuser -k {service_port}/tcp` 只杀占用服务端口的进程，不会误伤其他端口（如 8081）上的服务。杀完后用 `fuser {service_port}/tcp` 确认端口已释放
 6. **服务就绪后执行 aisbench** — aisbench 精度评测必须在 vLLM 服务完全启动并通过健康检查（`curl http://host:port/v1/models` 返回 200）之后才能执行，严禁在服务未就绪时发起评测
-7. **迭代记录** — 每次修改自动记录到 `fix_N.md`
+7. **迭代记录** — 每次修改记录到当前 `{run_dir}/records/fix_N.md`
 8. **启动耗时** — vLLM 服务启动通常需要 10 分钟以上
 9. **服务器环境** — 需要目标服务器已安装 Docker
 10. **配置一致性** — 启动脚本和测试脚本中的端口、模型名称必须一致
-11. **密码保护** — 各配置文件中的 `password` 字段请勿提交到版本控制，建议将 `config/` 目录加入 `.gitignore`
+11. **密码保护** — 真实配置只放在项目私有 `.vllm-ascend/config/`；初始化生成的嵌套 `.gitignore` 会统一忽略该状态目录内容
 12. **从 "Application startup complete" 往后看报错** — 分析启动/运行时错误时，从该关键词出现在日志中的位置往后找第一个错误，后续报错通常是级联失败
 13. **aisbench 服务端点配置在 config.py 中** — 不在命令行传递 `--host --port --model` 参数
 14. **日志过多时只打一个 rank** — 使用 `dist.get_rank() == 0` 过滤

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-从 config/test.yaml 生成 curl 测试脚本。
+从项目私有 config/test.yaml 或 Plugin 模板生成 curl 测试脚本。
 
 用法：
-    python scripts/generate_curl.py           # 生成 scripts/curl_test.sh
-    python scripts/generate_curl.py --dry-run # 只打印，不写文件
+    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/path_policy.py" init-run
+    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate_curl.py"
+    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate_curl.py" --dry-run
 
 生成的 curl_test.sh 可直接在容器内执行，用于发送推理请求。
 """
@@ -12,13 +13,21 @@
 import argparse
 import json
 import sys
-from pathlib import Path
 
 import yaml
 
-SKILL_ROOT = Path(__file__).resolve().parent.parent
-TEST_YAML = SKILL_ROOT / "config" / "test.yaml"
-OUTPUT = SKILL_ROOT / "scripts" / "curl_test.sh"
+from path_policy import (
+    get_active_run_dir,
+    get_config_dir,
+    get_project_root,
+    validate_local_write,
+)
+
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 
 
 def main():
@@ -26,9 +35,17 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--test-index", type=int, default=0)
     parser.add_argument("--prompt-index", type=int, default=0)
+    parser.add_argument("--project-root", help="用户项目根目录")
+    parser.add_argument("--config-dir", help="配置目录，默认优先项目私有配置")
     args = parser.parse_args()
 
-    with open(TEST_YAML) as f:
+    project_root = get_project_root(args.project_root)
+    config_dir = get_config_dir(project_root, args.config_dir)
+    test_yaml = config_dir / "test.yaml"
+    if not test_yaml.is_file():
+        sys.exit(f"找不到测试配置: {test_yaml}")
+
+    with open(test_yaml, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
     tests = cfg.get("tests", [])
@@ -45,9 +62,9 @@ def main():
     # model 名来源：test.yaml params.model > model.yaml
     model_name = params.get("model")
     if not model_name:
-        model_yaml = SKILL_ROOT / "config" / "model.yaml"
+        model_yaml = config_dir / "model.yaml"
         if model_yaml.exists():
-            with open(model_yaml) as f:
+            with open(model_yaml, encoding="utf-8") as f:
                 model_cfg = yaml.safe_load(f)
             model_name = model_cfg.get("served_model_name", "deepseek")
         else:
@@ -62,8 +79,8 @@ def main():
     payload_json = json.dumps(payload, ensure_ascii=False)
 
     script = f"""#!/bin/bash
-# 自动生成，来源: config/test.yaml
-# 重新生成: python scripts/generate_curl.py
+# 自动生成，来源: {test_yaml}
+# 重新生成: python3 "${{CLAUDE_PLUGIN_ROOT}}/scripts/generate_curl.py"
 
 unset http_proxy
 unset https_proxy
@@ -76,9 +93,15 @@ curl {endpoint} \\
     if args.dry_run:
         print(script)
     else:
-        OUTPUT.write_text(script)
-        OUTPUT.chmod(0o755)
-        print(f"已生成: {OUTPUT}")
+        run_dir = get_active_run_dir(project_root)
+        output = validate_local_write(
+            run_dir / "generated" / "curl_test.sh",
+            project_root,
+        )
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(script, encoding="utf-8")
+        output.chmod(0o755)
+        print(f"已生成: {output}")
 
 
 if __name__ == "__main__":

@@ -18,19 +18,19 @@
 
 ```bash
 # 单机模式
-python scripts/ssh_utils.py exec standalone "<command>"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "<command>"
 
 # PD分离模式 — P节点
-python scripts/ssh_utils.py exec pd-separated.p[0] "<command>"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.p[0] "<command>"
 
 # PD分离模式 — D节点
-python scripts/ssh_utils.py exec pd-separated.d[0] "<command>"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.d[0] "<command>"
 
 # 评测机器
-python scripts/ssh_utils.py exec eval "<command>"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec eval "<command>"
 
 # 操作完成后释放连接（可选，空闲 60 分钟自动退出）
-python scripts/ssh_utils.py stop standalone
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" stop standalone
 ```
 
 ### 约束 2：aisbench 必须在服务就绪后执行
@@ -78,11 +78,11 @@ ls {model.model_path}
 
 ```bash
 # 单机模式
-python scripts/ssh_utils.py wait standalone "{docker.log_file}" "Application startup complete" --timeout 3600
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait standalone "{docker.log_file}" "Application startup complete" --timeout 3600
 
 # PD分离模式 — 分别等 P 和 D 节点
-python scripts/ssh_utils.py wait pd-separated.p[0] "{docker.log_file}" "Application startup complete" --timeout 3600
-python scripts/ssh_utils.py wait pd-separated.d[0] "{docker.log_file}" "Application startup complete" --timeout 3600
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait pd-separated.p[0] "{docker.log_file}" "Application startup complete" --timeout 3600
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait pd-separated.d[0] "{docker.log_file}" "Application startup complete" --timeout 3600
 ```
 
 #### 2b. 检查启动结果
@@ -97,10 +97,10 @@ python scripts/ssh_utils.py wait pd-separated.d[0] "{docker.log_file}" "Applicat
 
 ```bash
 # 单机模式（用实际 IP，unset proxy）
-python scripts/ssh_utils.py exec standalone "docker exec {docker.name} bash -c 'unset http_proxy; unset https_proxy; curl -s -o /dev/null -w \"%{http_code}\" --max-time 30 http://{standalone.host}:{standalone.service_port}/v1/models'"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} bash -c 'unset http_proxy; unset https_proxy; curl -s -o /dev/null -w \"%{http_code}\" --max-time 30 http://{standalone.host}:{standalone.service_port}/v1/models'"
 
 # PD分离模式
-python scripts/ssh_utils.py exec pd-separated.p[0] "docker exec {docker.name} bash -c 'unset http_proxy; unset https_proxy; curl -s -o /dev/null -w \"%{http_code}\" --max-time 30 http://{pd-separated.host}:{pd-separated.service_port}/v1/models'"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.p[0] "docker exec {docker.name} bash -c 'unset http_proxy; unset https_proxy; curl -s -o /dev/null -w \"%{http_code}\" --max-time 30 http://{pd-separated.host}:{pd-separated.service_port}/v1/models'"
 ```
 
 - 返回 `200` → **服务就绪**，进入第 3 步
@@ -128,7 +128,7 @@ python scripts/ssh_utils.py exec pd-separated.p[0] "docker exec {docker.name} ba
 调用 **verifier.md** 模块，将测试输出与预期结果对比。
 
 - ✅ **验证通过** → 精度诊断完成
-  - 如有修复记录，更新 fix_N.md 标记为成功
+  - 如有修复记录，更新 `{run_dir}/records/fix_N.md` 标记为成功
   - 输出最终结果
   - 工作流结束
 
@@ -163,7 +163,7 @@ python scripts/ssh_utils.py exec pd-separated.p[0] "docker exec {docker.name} ba
 1. 读取定位到的可疑代码
 2. 匹配修复策略
 3. 应用代码修改
-4. 记录修复到 `fix_N.md`
+4. 记录修复到 `{run_dir}/records/fix_N.md`
 5. 准备重新测试
 
 ### 第 7 步：停止服务并重新开始迭代
@@ -218,7 +218,7 @@ python scripts/ssh_utils.py exec pd-separated.p[0] "docker exec {docker.name} ba
 
 每次完整循环（第 2 步到第 7 步）为一个迭代。
 
-- 每次循环对应一个 `fix_N.md` 记录文件
+- 每次循环对应当前 run 中的一个 `records/fix_N.md` 记录文件
 - 当前循环的修改不会影响上次的修改——所有修改累积叠加
 - 如果三次迭代未解决，建议：
   1. 重新评估问题定位是否准确
@@ -250,14 +250,15 @@ python scripts/ssh_utils.py exec pd-separated.p[0] "docker exec {docker.name} ba
 
 ```bash
 # 1) 启动服务时指定独立的日志文件（避免覆盖）
-python scripts/ssh_utils.py exec standalone "docker exec {docker.name} bash -c 'cd {docker.work_dir}; nohup bash {docker.startup_script} > {docker.work_dir}/service_A.log 2>&1 &'"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} bash -c 'cd {docker.work_dir}; nohup bash {docker.startup_script} > {docker.work_dir}/service_A.log 2>&1 &'"
 
 # 2) 等待启动 + 健康检查
-python scripts/ssh_utils.py wait standalone "{docker.work_dir}/service_A.log" "Application startup complete" --timeout 900
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait standalone "{docker.work_dir}/service_A.log" "Application startup complete" --timeout 900
 
 # 3) 执行测试
-python scripts/generate_curl.py
-python scripts/ssh_utils.py exec standalone "docker exec {docker.name} bash -c '$(cat scripts/curl_test.sh)'"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate_curl.py"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" upload standalone "{run_dir}/generated/curl_test.sh" "{standalone.work_dir}/curl_test.sh"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} bash {docker.work_dir}/curl_test.sh"
 ```
 
 ### 2. 配置 B（待测）跑测试
@@ -266,7 +267,7 @@ python scripts/ssh_utils.py exec standalone "docker exec {docker.name} bash -c '
 # 1) 按端口杀服务（fuser -k）
 # 2) 修改启动脚本 → 配置 B
 # 3) 启动服务，日志写入 service_B.log
-python scripts/ssh_utils.py exec standalone "docker exec {docker.name} bash -c 'cd {docker.work_dir}; nohup bash {docker.startup_script} > {docker.work_dir}/service_B.log 2>&1 &'"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} bash -c 'cd {docker.work_dir}; nohup bash {docker.startup_script} > {docker.work_dir}/service_B.log 2>&1 &'"
 # 4) 等待启动 + 健康检查 + 执行测试（同上）
 ```
 
@@ -274,8 +275,8 @@ python scripts/ssh_utils.py exec standalone "docker exec {docker.name} bash -c '
 
 ```bash
 # 分别从容器内两个日志文件中提取关键 debug 输出
-python scripts/ssh_utils.py exec standalone "docker exec {docker.name} grep 'DEBUG-CMP-FINAL' {docker.work_dir}/service_A.log"
-python scripts/ssh_utils.py exec standalone "docker exec {docker.name} grep 'DEBUG-CMP-FINAL' {docker.work_dir}/service_B.log"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} grep 'DEBUG-CMP-FINAL' {docker.work_dir}/service_A.log"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} grep 'DEBUG-CMP-FINAL' {docker.work_dir}/service_B.log"
 
 # 对比 out_sum 值，找第一处显著差异（>1% 即异常）
 ```

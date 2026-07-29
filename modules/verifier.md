@@ -22,9 +22,11 @@
 ### 步骤 1：获取实际输出
 
 ```bash
-# 运行测试并提取 text 字段
-python scripts/ssh_utils.py exec standalone "docker exec {docker.name} bash /path/to/curl_test.sh" | python3 -c "import sys,json; print(json.load(sys.stdin)['choices'][0]['text'])"
+# 运行测试
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} bash {docker.work_dir}/curl_test.sh"
 ```
+
+从 `ssh_utils.py` 返回 JSON 的 `stdout` 字段读取推理响应，再解析响应中的 `choices[0].text`；不要使用未经路径策略审计的本地 `python -c` 管道。
 
 ### 步骤 2：和预期输出对比
 

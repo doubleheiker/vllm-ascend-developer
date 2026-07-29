@@ -91,17 +91,22 @@ class PluginSkeletonTests(unittest.TestCase):
 
         self.assertEqual(frontmatter["name"], "vllm-ascend-developer")
 
-    def test_plugin_entry_has_no_round_one_behavior_drift(self):
-        _, legacy_body = split_frontmatter(
-            (ROOT / "SKILL.md").read_text(encoding="utf-8")
-        )
+    def test_plugin_entry_preserves_round_one_capabilities(self):
         _, plugin_body = split_frontmatter(
             (ROOT / "skills" / "diagnose" / "SKILL.md").read_text(
                 encoding="utf-8"
             )
         )
 
-        self.assertEqual(plugin_body, legacy_body)
+        for marker in (
+            "vLLM Ascend 开发 Skill",
+            "workflows/precision-diagnosis.md",
+            "modules/",
+            "standalone",
+            "pd-separated",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, plugin_body)
 
     def test_hooks_file_is_intentionally_inert(self):
         hooks = json.loads(

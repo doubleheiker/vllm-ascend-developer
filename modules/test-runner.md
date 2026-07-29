@@ -38,19 +38,21 @@
 **2a. 从 test.yaml 生成 curl 脚本：**
 
 ```bash
-python scripts/generate_curl.py
-# → 生成 scripts/curl_test.sh（内容来自 config/test.yaml）
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate_curl.py"
+# → 生成 {run_dir}/generated/curl_test.sh（内容来自 config/test.yaml）
 ```
 
 **2b. 执行测试：**
 
 ```bash
-# 1) 从 test.yaml 生成 curl 脚本
-python scripts/generate_curl.py
+# 1) 从 test.yaml 生成到当前安全运行目录
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate_curl.py"
 
-# 2) 写入容器 work_dir 并执行
-python scripts/ssh_utils.py exec standalone "docker exec {docker.name} bash -c 'cat > {docker.work_dir}/curl_test.sh' < scripts/curl_test.sh"
-python scripts/ssh_utils.py exec standalone "docker exec {docker.name} bash {docker.work_dir}/curl_test.sh"
+# 2) 上传到宿主机工作目录；该目录需映射到容器 work_dir
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" upload standalone "{run_dir}/generated/curl_test.sh" "{standalone.work_dir}/curl_test.sh"
+
+# 3) 在容器内执行
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} bash {docker.work_dir}/curl_test.sh"
 ```
 
 > **设计原则**：`test.yaml` 是 prompt 的**唯一数据源**。`generate_curl.py` 从中生成 curl 脚本，消除手动拼写不一致的风险。每次修改 test.yaml 后重新生成即可。

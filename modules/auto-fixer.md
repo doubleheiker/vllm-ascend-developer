@@ -72,27 +72,29 @@ cat -n {vllm_ascend_source}/path/to/file.py | head -50
 
 ### 远程模式下的修复流程
 
-代码运行在远程服务器上，通过 `scripts/ssh_utils.py` 读写文件：
+代码运行在远程服务器上，通过 Plugin 内的 `ssh_utils.py` 读写文件：
 
 ```bash
 # 步骤 1：读取远程源码
-python scripts/ssh_utils.py exec standalone "cat {vllm_ascend_source}/path/to/file.py"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "cat {vllm_ascend_source}/path/to/file.py"
 
 # 步骤 2：修改远程文件（sed 或 heredoc）
-python scripts/ssh_utils.py exec standalone "sed -i 's/old_code/new_code/' {vllm_ascend_source}/path/to/file.py"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "sed -i 's/old_code/new_code/' {vllm_ascend_source}/path/to/file.py"
 
 # 或上传本地修改好的文件
-python scripts/ssh_utils.py upload standalone /local/path/file.py {vllm_ascend_source}/path/to/file.py
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" upload standalone "{run_dir}/generated/file.py" "{vllm_ascend_source}/path/to/file.py"
 
 # 步骤 3：重启服务（按 service.md 流程）
 ```
 
 PD分离模式下将 `standalone` 替换为对应节点引用（`pd-separated.p[0]` / `pd-separated.d[0]`）。
 
-### 步骤 4：记录修复到 fix_N.md
+### 步骤 4：记录修复到当前 run
+
+记录文件必须位于 `{run_dir}/records/fix_N.md`，禁止写入 Plugin 目录或 workspace 根目录。
 
 ```markdown
-# fix_{N}.md
+# {run_dir}/records/fix_{N}.md
 
 ## 迭代 {N}
 - **日期**: {current_date}
@@ -110,7 +112,7 @@ PD分离模式下将 `standalone` 替换为对应节点引用（`pd-separated.p[
 {待验证}
 ```
 
-其中 N 从 1 开始递增。如果已有 fix_1.md, fix_2.md，则新建 fix_3.md。
+其中 N 从 1 开始递增。如果当前 run 已有 fix_1.md、fix_2.md，则新建 fix_3.md。
 
 ### 步骤 5：应用修复并重启验证
 
@@ -118,10 +120,10 @@ PD分离模式下将 `standalone` 替换为对应节点引用（`pd-separated.p[
 
 ```bash
 # 1. 停服务
-python scripts/ssh_utils.py exec standalone "fuser -k {service_port}/tcp 2>/dev/null"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "fuser -k {service_port}/tcp 2>/dev/null"
 
 # 2. 重启
-python scripts/ssh_utils.py exec standalone "docker exec {docker.name} bash -c 'cd {docker.work_dir}; nohup bash {docker.startup_script} > {docker.log_file} 2>&1 &'"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} bash -c 'cd {docker.work_dir}; nohup bash {docker.startup_script} > {docker.log_file} 2>&1 &'"
 
 # 3. 等待就绪 → 健康检查 → 跑测试验证
 ```

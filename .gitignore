@@ -10,4 +10,6 @@ fix_*.md
 # Local environment configuration and future run artifacts
 config/*.local.yaml
 config/*.local.yml
+config/*.secret.yaml
+config/*.secret.yml
 .vllm-ascend/

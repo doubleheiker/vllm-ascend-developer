@@ -9,10 +9,10 @@ vllm-ascend-developer SSH 工具 — 基于 service.yaml 的远程执行模块�
 - 支持 exec / upload / download / status / stop
 
 用法：
-    python scripts/ssh_utils.py exec standalone "hostname"
-    python scripts/ssh_utils.py exec pd-separated.p[0] "npu-smi info"
-    python scripts/ssh_utils.py status standalone
-    python scripts/ssh_utils.py stop standalone
+    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "hostname"
+    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.p[0] "npu-smi info"
+    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" status standalone
+    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" stop standalone
 """
 
 import argparse
@@ -27,6 +27,22 @@ import traceback
 from hashlib import md5
 from pathlib import Path
 from threading import Thread
+
+from path_policy import (
+    PathPolicyError,
+    get_config_dir,
+    get_project_root,
+    is_within,
+    validate_download_destination,
+    validate_remote_path,
+    validate_upload_source,
+    workspace_paths,
+)
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 
 # 依赖检查：第三方包不在标准库中，首次使用需安装
 try:
@@ -47,12 +63,22 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # 路径常量
 # ---------------------------------------------------------------------------
-SKILL_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_DIR = SKILL_ROOT / "config"
-SERVICE_YAML = CONFIG_DIR / "service.yaml"
-AISBENCH_YAML = CONFIG_DIR / "aisbench.yaml"
-DAEMON_DIR = Path("/tmp/vllm-ssh-daemon")
-DAEMON_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _config_file(name):
+    return get_config_dir() / name
+
+
+def _daemon_dir(create=False):
+    runtime = workspace_paths()["runtime"]
+    directory = (runtime / "ssh-daemon").resolve(strict=False)
+    if not is_within(directory, runtime):
+        raise PathPolicyError(
+            f"ssh-daemon 目录通过符号链接越过 runtime: {directory}"
+        )
+    if create:
+        directory.mkdir(parents=True, exist_ok=True)
+    return directory
 
 # daemon 配置
 IDLE_TIMEOUT = 3600       # 空闲超时 60 分钟
@@ -66,17 +92,28 @@ MAX_RECONNECT = 3         # 最大重连次数
 
 def load_service_config():
     """加载 service.yaml，返回 dict。"""
-    if not SERVICE_YAML.exists():
-        die(f"找不到配置文件: {SERVICE_YAML}")
-    with open(SERVICE_YAML) as f:
+    path = _config_file("service.yaml")
+    if not path.exists():
+        die(f"找不到配置文件: {path}")
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
 def load_aisbench_config():
     """加载 aisbench.yaml，返回 dict。"""
-    if not AISBENCH_YAML.exists():
-        die(f"找不到配置文件: {AISBENCH_YAML}")
-    with open(AISBENCH_YAML) as f:
+    path = _config_file("aisbench.yaml")
+    if not path.exists():
+        die(f"找不到配置文件: {path}")
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def load_model_config():
+    """加载 model.yaml，用于远程 SFTP 允许目录判定。"""
+    path = _config_file("model.yaml")
+    if not path.exists():
+        die(f"找不到配置文件: {path}")
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -171,7 +208,15 @@ def _daemon_key(node_ref):
 
 
 def _daemon_info_file(node_ref):
-    return DAEMON_DIR / f"{_daemon_key(node_ref)}.json"
+    daemon_dir = _daemon_dir()
+    candidate = (
+        daemon_dir / f"{_daemon_key(node_ref)}.json"
+    ).resolve(strict=False)
+    if not is_within(candidate, daemon_dir):
+        raise PathPolicyError(
+            f"daemon 信息文件通过符号链接越过 runtime: {candidate}"
+        )
+    return candidate
 
 
 def read_daemon_info(node_ref):
@@ -187,6 +232,7 @@ def read_daemon_info(node_ref):
 
 
 def write_daemon_info(node_ref, pid, port):
+    _daemon_dir(create=True)
     with open(_daemon_info_file(node_ref), "w") as f:
         json.dump({"pid": pid, "port": port, "node_ref": node_ref}, f)
 
@@ -446,6 +492,25 @@ def daemon_status(node_ref):
 # 远程操作接口
 # ============================================================================
 
+
+def _remote_transfer_roots(node_ref, operation):
+    """按节点与模型配置生成 SFTP 允许目录。"""
+    node = resolve_node(node_ref)
+    model = load_model_config()
+    work_dir = node.get("work_dir", "")
+    ascend_source = model.get("vllm_ascend_source", "")
+
+    if operation == "上传":
+        # 上传允许写 vllm-ascend 源码或节点工作目录，绝不写 vLLM 上游。
+        return [ascend_source, work_dir]
+    return [
+        work_dir,
+        ascend_source,
+        model.get("vllm_source", ""),
+        model.get("model_path", ""),
+    ]
+
+
 def exec_command(node_ref, command, timeout=600):
     """通过 daemon 执行远程命令。"""
     ensure_daemon(node_ref)
@@ -465,6 +530,17 @@ def exec_command(node_ref, command, timeout=600):
 
 def upload_file(node_ref, local_path, remote_path):
     """上传文件到远程节点。"""
+    local_path = str(
+        validate_upload_source(
+            local_path,
+            project_root=get_project_root(),
+        )
+    )
+    remote_path = validate_remote_path(
+        remote_path,
+        _remote_transfer_roots(node_ref, "上传"),
+        "上传",
+    )
     ensure_daemon(node_ref)
     info = read_daemon_info(node_ref)
     sock = socket.create_connection(("127.0.0.1", info["port"]), timeout=30)
@@ -477,6 +553,17 @@ def upload_file(node_ref, local_path, remote_path):
 
 def download_file(node_ref, remote_path, local_path):
     """从远程节点下载文件。"""
+    remote_path = validate_remote_path(
+        remote_path,
+        _remote_transfer_roots(node_ref, "下载"),
+        "下载",
+    )
+    local_path = validate_download_destination(
+        local_path,
+        project_root=get_project_root(),
+    )
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_path = str(local_path)
     ensure_daemon(node_ref)
     info = read_daemon_info(node_ref)
     sock = socket.create_connection(("127.0.0.1", info["port"]), timeout=30)
@@ -530,6 +617,8 @@ def die(msg):
 
 def main():
     parser = argparse.ArgumentParser(description="vllm-ascend-developer SSH 工具")
+    parser.add_argument("--project-root", help="用户项目根目录")
+    parser.add_argument("--config-dir", help="配置目录，默认优先项目私有配置")
     sub = parser.add_subparsers(dest="action", required=True)
 
     # exec
@@ -568,18 +657,30 @@ def main():
 
     args = parser.parse_args()
 
-    if args.action == "exec":
-        print_json(exec_command(args.node_ref, args.command, args.timeout))
-    elif args.action == "status":
-        daemon_status(args.node_ref)
-    elif args.action == "stop":
-        stop_daemon(args.node_ref)
-    elif args.action == "upload":
-        print_json(upload_file(args.node_ref, args.local_path, args.remote_path))
-    elif args.action == "download":
-        print_json(download_file(args.node_ref, args.remote_path, args.local_path))
-    elif args.action == "wait":
-        print_json(wait_for_keyword(args.node_ref, args.log_file, args.keyword, args.interval, args.timeout))
+    if args.project_root:
+        os.environ["VLLM_ASCEND_PROJECT_ROOT"] = str(
+            Path(args.project_root).resolve(strict=False)
+        )
+    if args.config_dir:
+        os.environ["VLLM_ASCEND_CONFIG_DIR"] = str(
+            Path(args.config_dir).resolve(strict=False)
+        )
+
+    try:
+        if args.action == "exec":
+            print_json(exec_command(args.node_ref, args.command, args.timeout))
+        elif args.action == "status":
+            daemon_status(args.node_ref)
+        elif args.action == "stop":
+            stop_daemon(args.node_ref)
+        elif args.action == "upload":
+            print_json(upload_file(args.node_ref, args.local_path, args.remote_path))
+        elif args.action == "download":
+            print_json(download_file(args.node_ref, args.remote_path, args.local_path))
+        elif args.action == "wait":
+            print_json(wait_for_keyword(args.node_ref, args.log_file, args.keyword, args.interval, args.timeout))
+    except PathPolicyError as exc:
+        die(str(exc))
 
 
 if __name__ == "__main__":
