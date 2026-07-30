@@ -3,7 +3,7 @@
 从项目私有 config/test.yaml 或 Plugin 模板生成 curl 测试脚本。
 
 用法：
-    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/path_policy.py" init-run
+    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/path_policy.py" bootstrap
     python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate_curl.py"
     python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate_curl.py" --dry-run
 

@@ -39,13 +39,13 @@ class PathPolicyTests(unittest.TestCase):
         for name in ("generated", "downloads", "logs", "records"):
             self.assertTrue((self.run["run_dir"] / name).is_dir())
         self.assertTrue(
-            (self.project / ".vllm-ascend" / "config").is_dir()
+            (self.project / ".dev" / "config").is_dir()
         )
         self.assertTrue(
-            (self.project / ".vllm-ascend" / "runtime").is_dir()
+            (self.project / ".dev" / "runtime").is_dir()
         )
         state_ignore = (
-            self.project / ".vllm-ascend" / ".gitignore"
+            self.project / ".dev" / ".gitignore"
         ).read_text(encoding="utf-8")
         self.assertIn("*\n", state_ignore)
         self.assertNotIn("!.gitignore", state_ignore)
@@ -55,9 +55,23 @@ class PathPolicyTests(unittest.TestCase):
         ):
             path_policy.initialize_run(self.project, "run-001")
 
+    def test_local_state_name_does_not_overlap_product_name(self):
+        self.assertEqual(path_policy.STATE_DIR_NAME, ".dev")
+        for path in (
+            SCRIPTS / "path_policy.py",
+            ROOT / "skills" / "diagnose" / "SKILL.md",
+            ROOT / "AGENTS.md",
+            ROOT / "CLAUDE.md",
+        ):
+            with self.subTest(path=path):
+                self.assertNotIn(
+                    ".vllm-ascend",
+                    path.read_text(encoding="utf-8"),
+                )
+
     def test_config_dir_override_is_restricted_in_script_core(self):
         project_config = (
-            self.project / ".vllm-ascend" / "config"
+            self.project / ".dev" / "config"
         ).resolve()
         self.assertEqual(
             path_policy.get_config_dir(
@@ -75,11 +89,45 @@ class PathPolicyTests(unittest.TestCase):
                 self.project.parent,
             )
 
+    def test_bootstrap_copies_templates_once_without_overwrite(self):
+        first = path_policy.bootstrap_project(
+            self.project,
+            "run-bootstrap-1",
+        )
+        self.assertEqual(
+            set(first["copied"]),
+            set(path_policy.CONFIG_FILE_NAMES),
+        )
+        self.assertEqual(first["existing"], [])
+        self.assertTrue(first["new_templates_copied"])
+
+        config_dir = first["config_dir"]
+        service_yaml = config_dir / "service.yaml"
+        service_yaml.write_text(
+            "# 用户配置，禁止覆盖\nmode: standalone\n",
+            encoding="utf-8",
+        )
+
+        second = path_policy.bootstrap_project(
+            self.project,
+            "run-bootstrap-2",
+        )
+        self.assertEqual(second["copied"], [])
+        self.assertEqual(
+            set(second["existing"]),
+            set(path_policy.CONFIG_FILE_NAMES),
+        )
+        self.assertFalse(second["new_templates_copied"])
+        self.assertEqual(
+            service_yaml.read_text(encoding="utf-8"),
+            "# 用户配置，禁止覆盖\nmode: standalone\n",
+        )
+
     def test_local_writes_are_limited_to_config_and_active_run(self):
         allowed_record = self.run["records"] / "修复 1.md"
         allowed_config = (
             self.project
-            / ".vllm-ascend"
+            / ".dev"
             / "config"
             / "service.local.yaml"
         )
@@ -139,7 +187,7 @@ class PathPolicyTests(unittest.TestCase):
         outside = Path(self.temp_dir.name) / "外部状态目录"
         outside.mkdir()
         try:
-            (symlink_project / ".vllm-ascend").symlink_to(
+            (symlink_project / ".dev").symlink_to(
                 outside,
                 target_is_directory=True,
             )
@@ -205,7 +253,7 @@ class PathPolicyTests(unittest.TestCase):
             path_policy.validate_bash_command(
                 (
                     'cp -n "${CLAUDE_PLUGIN_ROOT}/config/"*.yaml '
-                    '"${CLAUDE_PROJECT_DIR}/.vllm-ascend/config/"'
+                    '"${CLAUDE_PROJECT_DIR}/.dev/config/"'
                 ),
                 self.project,
             )
@@ -385,12 +433,46 @@ class PathPolicyTests(unittest.TestCase):
 
 
 class PathSafetyIntegrationTests(unittest.TestCase):
+    def test_bootstrap_cli_returns_machine_readable_result(self):
+        with tempfile.TemporaryDirectory(prefix="bootstrap-") as raw:
+            project = Path(raw) / "中文 project with space"
+            project.mkdir()
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(SCRIPTS / "path_policy.py"),
+                    "--project-root",
+                    str(project),
+                    "bootstrap",
+                    "--run-id",
+                    "run-bootstrap-cli",
+                ],
+                cwd=project,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            output = json.loads(completed.stdout)
+            self.assertTrue(output["success"])
+            self.assertEqual(
+                set(output["copied"]),
+                set(path_policy.CONFIG_FILE_NAMES),
+            )
+            self.assertEqual(output["existing"], [])
+            self.assertTrue(output["new_templates_copied"])
+            self.assertTrue(Path(output["run_dir"]).is_dir())
+            self.assertTrue(Path(output["config_dir"]).is_dir())
+
     def test_generate_curl_writes_only_to_active_run(self):
         with tempfile.TemporaryDirectory(prefix="curl生成-") as raw:
             project = Path(raw) / "项目 with space"
             project.mkdir()
             run = path_policy.initialize_run(project, "run-curl")
-            config = project / ".vllm-ascend" / "config"
+            config = project / ".dev" / "config"
             (config / "test.yaml").write_text(
                 """
 tests:
@@ -498,11 +580,16 @@ tests:
         self.assertNotIn("scripts/curl_test.sh", combined)
         self.assertIn("${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py", combined)
         self.assertIn("{run_dir}/records/fix_N.md", combined)
+        skill_source = runtime_docs[0].read_text(encoding="utf-8")
+        self.assertIn("path_policy.py", skill_source)
+        self.assertIn("bootstrap", skill_source)
+        self.assertNotIn("cp -n", skill_source)
+        self.assertIn("不要预先用 `ls`", skill_source)
 
     def test_runtime_artifacts_and_secret_configs_are_ignored(self):
         ignore_rules = (ROOT / ".gitignore").read_text(encoding="utf-8")
         for marker in (
-            ".vllm-ascend/",
+            ".dev/",
             "config/*.local.yaml",
             "config/*.local.yml",
             "config/*.secret.yaml",

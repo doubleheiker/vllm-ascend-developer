@@ -90,7 +90,7 @@ class BaselineCapabilityTests(unittest.TestCase):
         ignore_rules = (ROOT / ".gitignore").read_text(encoding="utf-8")
         self.assertIn("scripts/curl_test.sh", ignore_rules)
         self.assertIn("__pycache__/", ignore_rules)
-        self.assertIn(".vllm-ascend/", ignore_rules)
+        self.assertIn(".dev/", ignore_rules)
 
     @staticmethod
     def _load_json(path):
@@ -126,7 +126,7 @@ class KnownGapContractTests(unittest.TestCase):
         self.assertTrue(path_policy.is_file())
         policy_source = path_policy.read_text(encoding="utf-8")
         skill_source = plugin_skill.read_text(encoding="utf-8")
-        self.assertIn(".vllm-ascend", policy_source)
+        self.assertIn('STATE_DIR_NAME = ".dev"', policy_source)
         self.assertIn("PreToolUse", skill_source)
         self.assertIn('matcher: "Write|Edit|Bash"', skill_source)
 

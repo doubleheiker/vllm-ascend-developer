@@ -21,9 +21,16 @@ if hasattr(sys.stderr, "reconfigure"):
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
-STATE_DIR_NAME = ".vllm-ascend"
+STATE_DIR_NAME = ".dev"
 ACTIVE_RUN_FILE = "active-run.json"
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
+CONFIG_FILE_NAMES = (
+    "service.yaml",
+    "test.yaml",
+    "model.yaml",
+    "aisbench.yaml",
+    "proxy.yaml",
+)
 TRUSTED_SCRIPTS = {"path_policy.py", "generate_curl.py", "ssh_utils.py"}
 INTERPRETERS = {
     "bash",
@@ -137,14 +144,7 @@ def get_config_dir(project_root=None, explicit=None):
         return candidate
 
     project_config = project / STATE_DIR_NAME / "config"
-    known_configs = (
-        "service.yaml",
-        "test.yaml",
-        "model.yaml",
-        "aisbench.yaml",
-        "proxy.yaml",
-    )
-    if any((project_config / name).is_file() for name in known_configs):
+    if any((project_config / name).is_file() for name in CONFIG_FILE_NAMES):
         return project_config.resolve(strict=False)
     return (PLUGIN_ROOT / "config").resolve(strict=False)
 
@@ -240,13 +240,70 @@ def initialize_run(project_root=None, run_id=None):
     }
 
 
+def initialize_config_templates(project_root=None):
+    """幂等复制缺失的配置模板，绝不覆盖项目已有配置。"""
+    paths = workspace_paths(project_root)
+    source_dir = (PLUGIN_ROOT / "config").resolve(strict=False)
+    target_dir = paths["config"].resolve(strict=False)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    paths["state_ignore_file"].write_text(
+        "# 由 vllm-ascend-developer 管理：配置、凭据和运行产物禁止提交\n"
+        "*\n",
+        encoding="utf-8",
+    )
+
+    copied = []
+    existing = []
+    for name in CONFIG_FILE_NAMES:
+        source = (source_dir / name).resolve(strict=False)
+        if not is_within(source, source_dir) or not source.is_file():
+            raise PathPolicyError(f"Plugin 配置模板不存在或不安全: {source}")
+
+        target = target_dir / name
+        resolved_target = target.resolve(strict=False)
+        if not is_within(resolved_target, target_dir):
+            raise PathPolicyError(
+                f"配置目标通过符号链接越过项目配置目录: {resolved_target}"
+            )
+        if target.exists() or target.is_symlink():
+            if not target.is_file():
+                raise PathPolicyError(f"配置目标不是普通文件: {target}")
+            existing.append(name)
+            continue
+
+        try:
+            with target.open("xb") as output:
+                output.write(source.read_bytes())
+        except FileExistsError:
+            existing.append(name)
+        else:
+            copied.append(name)
+
+    return {
+        "config_dir": target_dir,
+        "copied": copied,
+        "existing": existing,
+        "new_templates_copied": bool(copied),
+    }
+
+
+def bootstrap_project(project_root=None, run_id=None):
+    """一次完成配置模板初始化和当前 run 创建。"""
+    config_result = initialize_config_templates(project_root)
+    run_result = initialize_run(project_root, run_id)
+    return {
+        **config_result,
+        **run_result,
+    }
+
+
 def get_active_run_dir(project_root=None, required=True):
     paths = workspace_paths(project_root)
     active_file = paths["active_run_file"]
     if not active_file.is_file():
         if required:
             raise PathPolicyError(
-                "尚未初始化运行目录；请先执行 path_policy.py init-run"
+                "尚未初始化运行目录；请先执行 path_policy.py bootstrap"
             )
         return None
 
@@ -260,7 +317,7 @@ def get_active_run_dir(project_root=None, required=True):
         raise PathPolicyError("活动运行记录缺少 run_dir")
     run_dir = _resolve_local_path(relative, paths["state"])
     if not is_within(run_dir, paths["runs"]):
-        raise PathPolicyError("活动运行目录越过 .vllm-ascend/runs")
+        raise PathPolicyError("活动运行目录越过 .dev/runs")
     if required and not run_dir.is_dir():
         raise PathPolicyError(f"活动运行目录不存在: {run_dir}")
     return run_dir
@@ -283,16 +340,16 @@ def validate_local_write(path, project_root=None, cwd=None, allow_runtime=False)
         return target
     if is_within(target, PLUGIN_ROOT):
         raise PathPolicyError(
-            f"拒绝写入 Plugin 源目录: {target}；运行结果必须写入 .vllm-ascend/runs"
+            f"拒绝写入 Plugin 源目录: {target}；运行结果必须写入 .dev/runs"
         )
     if not is_within(target, project):
         raise PathPolicyError(f"拒绝写入 workspace 外路径: {target}")
     if is_within(target, paths["runs"]) and active_run is None:
         raise PathPolicyError(
-            "拒绝写入未初始化的 runs 目录；请先执行 path_policy.py init-run"
+            "拒绝写入未初始化的 runs 目录；请先执行 path_policy.py bootstrap"
         )
     raise PathPolicyError(
-        f"拒绝写入非运行目录: {target}；只允许当前 run 或 .vllm-ascend/config"
+        f"拒绝写入非运行目录: {target}；只允许当前 run 或 .dev/config"
     )
 
 
@@ -739,6 +796,11 @@ def main():
 
     p_init = sub.add_parser("init-run", help="初始化安全运行目录")
     p_init.add_argument("--run-id")
+    p_bootstrap = sub.add_parser(
+        "bootstrap",
+        help="复制缺失配置模板并初始化安全运行目录",
+    )
+    p_bootstrap.add_argument("--run-id")
     sub.add_parser("paths", help="显示当前安全路径")
     sub.add_parser("hook", help="处理 Claude Code PreToolUse JSON")
     p_check = sub.add_parser("check-write", help="检查本地写入路径")
@@ -763,6 +825,17 @@ def main():
                 {
                     "success": True,
                     **{key: str(value) for key, value in result.items()},
+                }
+            )
+        elif args.action == "bootstrap":
+            result = bootstrap_project(project, args.run_id)
+            _print_json(
+                {
+                    "success": True,
+                    **{
+                        key: str(value) if isinstance(value, Path) else value
+                        for key, value in result.items()
+                    },
                 }
             )
         elif args.action == "paths":

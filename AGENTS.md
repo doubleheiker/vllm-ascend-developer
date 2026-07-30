@@ -25,14 +25,14 @@ service  test-runner  verifier  aisbench-evaluator  log-analyzer  auto-fixer
    └────────┴───────────┬───────────┘                  └──────┬──────┘
                         ▼                                     ▼
               scripts/ssh_utils.py          {model.vllm_ascend_source}  ← only place code is edited
-              (sole remote path)              .vllm-ascend/runs/<run-id>/records/fix_N.md
+              (sole remote path)              .dev/runs/<run-id>/records/fix_N.md
 ```
 
 Key cross-file concepts:
 
-- **Configuration is resolved project-first.** Real configuration belongs under `${CLAUDE_PROJECT_DIR}/.vllm-ascend/config/`; the bundled `config/*.yaml` files are read-only templates. Every module references placeholders like `{standalone.service_port}`, `{docker.name}`, and `{vllm_ascend_source}`.
-- **`scripts/ssh_utils.py` is the ONLY way to touch a remote server.** It reads connection info from the resolved config directory (no `~/.ssh/config`), starts a persistent Paramiko daemon under `.vllm-ascend/runtime/ssh-daemon/`, and reuses it. Passwords are passed in-memory, never on the command line. Idle daemons self-exit after 60 min.
-- **Local writes are machine-checked.** `scripts/path_policy.py` creates `.vllm-ascend/runs/<run-id>/` and handles the Skill-scoped `PreToolUse` policy. Plugin files are read-only; generated scripts, downloads, logs, and records stay inside the active run.
+- **Configuration is resolved project-first.** Real configuration belongs under `${CLAUDE_PROJECT_DIR}/.dev/config/`; the bundled `config/*.yaml` files are read-only templates. Every module references placeholders like `{standalone.service_port}`, `{docker.name}`, and `{vllm_ascend_source}`.
+- **`scripts/ssh_utils.py` is the ONLY way to touch a remote server.** It reads connection info from the resolved config directory (no `~/.ssh/config`), starts a persistent Paramiko daemon under `.dev/runtime/ssh-daemon/`, and reuses it. Passwords are passed in-memory, never on the command line. Idle daemons self-exit after 60 min.
+- **Local writes are machine-checked.** `scripts/path_policy.py` creates `.dev/runs/<run-id>/` and handles the Skill-scoped `PreToolUse` policy. Plugin files are read-only; generated scripts, downloads, logs, and records stay inside the active run.
 - **Node references** resolve a logical name to connection info: `standalone`, `pd-separated.p[0]` / `pd-separated.d[0]` (Prefill/Decode nodes), and `eval` (aisbench machine, defined in `aisbench.yaml`).
 - **`test.yaml` is the single source of prompts.** `scripts/generate_curl.py` renders it into the active run's `generated/curl_test.sh` — never hand-write curl, or A/B comparisons break on prompt mismatch.
 - **Two deployment modes**, selected by `mode:` in `service.yaml`:
@@ -53,7 +53,7 @@ python -c "import paramiko, yaml; print('ok')"   # verify
 Remote execution (run from the user project; Plugin paths are absolute):
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/path_policy.py" init-run
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/path_policy.py" bootstrap
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec   standalone|pd-separated.p[0]|pd-separated.d[0]|eval "<cmd>"
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait   <node> "<logfile>" "<keyword>" --timeout 900 --interval 30
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" upload <node> <local> <remote>
@@ -95,4 +95,4 @@ bash HyperScript/HyperScript.sh --check-npu | --kill-all | --stop-all-containers
 
 ## Repo hygiene notes
 
-- Bundled `config/*.yaml` files contain placeholders only. Real credentials belong in the project-private `.vllm-ascend/config/`; `init-run` creates `.vllm-ascend/.gitignore` so configs, daemon state, and run artifacts remain untracked. Never put real credentials in the Plugin templates.
+- Bundled `config/*.yaml` files contain placeholders only. Real credentials belong in the project-private `.dev/config/`; `bootstrap` copies only missing templates and creates `.dev/.gitignore` so configs, daemon state, and run artifacts remain untracked. Never put real credentials in the Plugin templates.

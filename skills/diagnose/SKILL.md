@@ -19,18 +19,20 @@ hooks:
 
 ## 本地路径安全
 
-Plugin 安装目录 `${CLAUDE_PLUGIN_ROOT}` 只读。所有本地配置和运行结果只能写入用户项目 `${CLAUDE_PROJECT_DIR}/.vllm-ascend/`。
+Plugin 安装目录 `${CLAUDE_PLUGIN_ROOT}` 只读。所有本地配置和运行结果只能写入用户项目 `${CLAUDE_PROJECT_DIR}/.dev/`。
 
-开始一次会产生文件的诊断前，先初始化唯一运行目录：
+开始诊断时只执行一次 `bootstrap`，由脚本幂等复制缺失配置模板并初始化唯一运行目录：
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/path_policy.py" \
-  --project-root "${CLAUDE_PROJECT_DIR}" init-run
+  --project-root "${CLAUDE_PROJECT_DIR}" bootstrap
 ```
+
+不要预先用 `ls` 检查配置目录，不要手工执行 `mkdir` 或 `cp`。读取返回的 `copied`、`existing` 和 `new_templates_copied`：已有配置永不覆盖；当 `new_templates_copied` 为 `true` 时，告知用户填写新复制的配置并停止，等待用户确认后再继续。该字段只表示本次复制了新模板，不代表已有配置已经通过工作流校验。
 
 保存命令返回的 `run_dir`，本轮生成脚本写入 `generated/`、下载文件写入 `downloads/`、日志写入 `logs/`、修复记录写入 `records/`。禁止在 Plugin 源目录、workspace 外或未激活的 run 中生成文件。Hook 拒绝操作时，用中文解释原因，不要通过其他工具或命令绕过。
 
-初始化时会创建 `${CLAUDE_PROJECT_DIR}/.vllm-ascend/.gitignore`，统一忽略项目私有配置、凭据、daemon 状态和全部运行产物。
+初始化时会创建 `${CLAUDE_PROJECT_DIR}/.dev/.gitignore`，统一忽略项目私有配置、凭据、daemon 状态和全部运行产物。
 
 ## 目录结构
 
@@ -82,20 +84,15 @@ python -c "import paramiko, yaml; print('ok')"
 
 ### 第一步：配置环境
 
-Plugin 中的 `${CLAUDE_PLUGIN_ROOT}/config/*.yaml` 是只读模板。首次使用时，将模板复制到项目私有目录，真实密码和路径只写入该目录：
-
-```bash
-cp -n "${CLAUDE_PLUGIN_ROOT}/config/"*.yaml \
-  "${CLAUDE_PROJECT_DIR}/.vllm-ascend/config/"
-```
+Plugin 中的 `${CLAUDE_PLUGIN_ROOT}/config/*.yaml` 是只读模板。`bootstrap` 会将缺失模板复制到项目私有目录，绝不覆盖已有文件。不要让模型自行拼接复制命令。真实密码和路径只写入项目私有配置。
 
 根据实际环境修改：
 
-1. **`${CLAUDE_PROJECT_DIR}/.vllm-ascend/config/service.yaml`** — 部署模式、服务器连接、Docker 配置
-2. **`${CLAUDE_PROJECT_DIR}/.vllm-ascend/config/test.yaml`** — 测试用例、请求参数、prompt、预期输出
-3. **`${CLAUDE_PROJECT_DIR}/.vllm-ascend/config/model.yaml`** — 模型路径和源码路径
-4. **`${CLAUDE_PROJECT_DIR}/.vllm-ascend/config/aisbench.yaml`** — 【可选】精度数据集评测参数
-5. **`${CLAUDE_PROJECT_DIR}/.vllm-ascend/config/proxy.yaml`** — 【可选】网络代理
+1. **`${CLAUDE_PROJECT_DIR}/.dev/config/service.yaml`** — 部署模式、服务器连接、Docker 配置
+2. **`${CLAUDE_PROJECT_DIR}/.dev/config/test.yaml`** — 测试用例、请求参数、prompt、预期输出
+3. **`${CLAUDE_PROJECT_DIR}/.dev/config/model.yaml`** — 模型路径和源码路径
+4. **`${CLAUDE_PROJECT_DIR}/.dev/config/aisbench.yaml`** — 【可选】精度数据集评测参数
+5. **`${CLAUDE_PROJECT_DIR}/.dev/config/proxy.yaml`** — 【可选】网络代理
 
 ### 第二步：执行精度诊断工作流
 
@@ -196,7 +193,7 @@ pd-separated:
 8. **启动耗时** — vLLM 服务启动通常需要 10 分钟以上
 9. **服务器环境** — 需要目标服务器已安装 Docker
 10. **配置一致性** — 启动脚本和测试脚本中的端口、模型名称必须一致
-11. **密码保护** — 真实配置只放在项目私有 `.vllm-ascend/config/`；初始化生成的嵌套 `.gitignore` 会统一忽略该状态目录内容
+11. **密码保护** — 真实配置只放在项目私有 `.dev/config/`；初始化生成的嵌套 `.gitignore` 会统一忽略该状态目录内容
 12. **从 "Application startup complete" 往后看报错** — 分析启动/运行时错误时，从该关键词出现在日志中的位置往后找第一个错误，后续报错通常是级联失败
 13. **aisbench 服务端点配置在 config.py 中** — 不在命令行传递 `--host --port --model` 参数
 14. **日志过多时只打一个 rank** — 使用 `dist.get_rank() == 0` 过滤
