@@ -123,7 +123,7 @@ PD分离模式下将 `standalone` 替换为对应节点引用（`pd-separated.p[
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "fuser -k {service_port}/tcp 2>/dev/null"
 
 # 2. 重启
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} bash -c 'cd {docker.work_dir}; nohup bash {docker.startup_script} > {docker.log_file} 2>&1 &'"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "nohup bash {docker.startup_script} > {docker.log_file} 2>&1 &"
 
 # 3. 等待就绪 → 健康检查 → 跑测试验证
 ```

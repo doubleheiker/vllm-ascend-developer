@@ -52,7 +52,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate_curl.py"
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" upload standalone "{run_dir}/generated/curl_test.sh" "{standalone.work_dir}/curl_test.sh"
 
 # 3) 在容器内执行
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} bash {docker.work_dir}/curl_test.sh"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "bash {docker.work_dir}/curl_test.sh"
 ```
 
 > **设计原则**：`test.yaml` 是 prompt 的**唯一数据源**。`generate_curl.py` 从中生成 curl 脚本，消除手动拼写不一致的风险。每次修改 test.yaml 后重新生成即可。

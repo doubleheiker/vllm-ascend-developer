@@ -25,10 +25,10 @@
 
 ```bash
 # 查看服务日志尾部
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} tail -n 50 {docker.log_file}"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "tail -n 50 {docker.log_file}"
 
 # 搜索错误关键词
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} grep -n -i 'error\|warn\|fail\|traceback\|nan\|inf\|overflow' {docker.log_file}"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "grep -n -i 'error\|warn\|fail\|traceback\|nan\|inf\|overflow' {docker.log_file}"
 ```
 
 ### 步骤 2：读取测试日志中的异常
@@ -57,13 +57,13 @@ cat {output_log}
 
 ```bash
 # 查看 plog 目录
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} ls /root/ascend/log/debug/plog/"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "ls /root/ascend/log/debug/plog/"
 
 # 搜索 plog 关键错误
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} grep -n -i 'error\|fail\|exception\|oom\|overflow' /root/ascend/log/debug/plog/*.log 2>/dev/null | head -30"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "grep -n -i 'error\|fail\|exception\|oom\|overflow' /root/ascend/log/debug/plog/*.log 2>/dev/null | head -30"
 
 # 查看最新 plog 文件
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} bash -c 'tail -n 100 /root/ascend/log/debug/plog/\$(ls -t /root/ascend/log/debug/plog/ | head -1) 2>/dev/null'"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "tail -n 100 /root/ascend/log/debug/plog/\$(ls -t /root/ascend/log/debug/plog/ | head -1) 2>/dev/null"
 ```
 
 注意：每次重启服务前应清空 plog（`rm -rf /root/ascend/log/debug/plog/*`），确保 plog 内容对应最新的运行过程。
@@ -98,7 +98,7 @@ grep -rn "suspected_function_name" {vllm_source} --include="*.py" | head -20
 
 ```bash
 # 抓取逐层 out_sum（两个配置分别跑，保存到不同 log）
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} grep 'DEBUG-CMP-FINAL' {log}" > "{run_dir}/logs/layer_output.log"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "grep 'DEBUG-CMP-FINAL' {log}" > "{run_dir}/logs/layer_output.log"
 
 # 对比第一处显著差异（>1% 即异常，远超 float32 精度 1e-6）
 # 第一层就出差异 → KV cache 或 prefill 问题

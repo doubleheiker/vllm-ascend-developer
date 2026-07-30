@@ -6,10 +6,12 @@ vllm-ascend-developer SSH 工具 — 基于 service.yaml 的远程执行模块�
 - 从 config/service.yaml 读取节点连接信息，无需 ~/.ssh/config
 - 持久连接 daemon：首次连接后复用，避免反复 SSH 握手
 - 密码通过 Paramiko 内存传递，不暴露在命令行
-- 支持 exec / upload / download / status / stop
+- 支持 exec / docker-exec / upload / download / status / stop
+- docker-exec 从节点配置注入 env_vars，并合并节点级/全局 Docker 配置
 
 用法：
     python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "hostname"
+    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "env"
     python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.p[0] "npu-smi info"
     python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" status standalone
     python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" stop standalone
@@ -18,6 +20,8 @@ vllm-ascend-developer SSH 工具 — 基于 service.yaml 的远程执行模块�
 import argparse
 import json
 import os
+import re
+import shlex
 import signal
 import socket
 import struct
@@ -118,7 +122,7 @@ def load_model_config():
 
 
 def resolve_node(node_ref):
-    """解析节点引用，返回 {host, port, username, password, work_dir} 或报错退出。
+    """解析节点引用，返回连接、宿主机目录、环境变量和 Docker 配置。
 
     node_ref 格式：
       - "standalone"                     → service.yaml standalone 节点
@@ -139,7 +143,7 @@ def resolve_node(node_ref):
         section = cfg.get("standalone")
         if not section:
             die("配置中没有 standalone 节点")
-        return _extract_node(section)
+        return _extract_node(section, cfg.get("docker"))
 
     if node_ref.startswith("pd-separated."):
         rest = node_ref[len("pd-separated."):]
@@ -153,7 +157,7 @@ def resolve_node(node_ref):
             die(f"无效节点引用: {node_ref}")
         if idx >= len(nodes):
             die(f"节点索引超出范围: {node_ref} (共 {len(nodes)} 个)")
-        return _extract_node(nodes[idx])
+        return _extract_node(nodes[idx], cfg.get("docker"))
 
     die(f"无效节点引用: {node_ref}")
 
@@ -166,14 +170,17 @@ def _parse_index(s, prefix):
         die(f"无效节点引用格式")
 
 
-def _extract_node(n):
+def _extract_node(n, docker_defaults=None):
     """从 service.yaml 节点配置中提取连接信息，验证必填字段。"""
+    docker = _merge_docker_config(docker_defaults, n.get("docker"))
     info = {
         "host": n.get("host", ""),
         "port": n.get("port", 22),
         "username": n.get("username", "root"),
         "password": n.get("password", ""),
         "work_dir": n.get("work_dir", ""),
+        "env_vars": _normalize_env_vars(n.get("env_vars")),
+        "docker": docker,
     }
     if not info["host"] or info["host"].startswith("<"):
         die(f"节点 host 未配置或为占位符: {info['host']}")
@@ -184,18 +191,54 @@ def _extract_node(n):
 
 def _extract_eval_node(n):
     """从 aisbench.yaml eval_machine 提取连接信息。"""
+    docker = _merge_docker_config(None, n.get("docker"))
     info = {
         "host": n.get("host", ""),
         "port": n.get("port", 22),
         "username": n.get("username", "root"),
         "password": n.get("password", ""),
-        "work_dir": n.get("docker", {}).get("work_dir", ""),
+        "work_dir": docker.get("work_dir", ""),
+        "env_vars": _normalize_env_vars(n.get("env_vars")),
+        "docker": docker,
     }
     if not info["host"] or info["host"].startswith("<"):
         die(f"评测机器 host 未配置: {info['host']}")
     if not info["password"] or info["password"].startswith("<"):
         die(f"评测机器 password 未配置")
     return info
+
+
+def _merge_docker_config(defaults, override):
+    """合并全局与节点级 Docker 配置，并对错误形状给出中文提示。"""
+    for label, value in (
+        ("全局 docker", defaults),
+        ("节点 docker", override),
+    ):
+        if value is not None and not isinstance(value, dict):
+            die(f"{label} 必须是 YAML 映射")
+    merged = dict(defaults or {})
+    merged.update(override or {})
+    return merged
+
+
+def _normalize_env_vars(raw):
+    """校验并规范化容器环境变量，避免把任意 Shell 片段当作变量名。"""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        die("env_vars 必须是 YAML 映射，例如 KEY: \"value\"")
+
+    normalized = {}
+    for name, value in raw.items():
+        if not isinstance(name, str) or not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*",
+            name,
+        ):
+            die(f"env_vars 包含无效变量名: {name!r}")
+        if value is None or isinstance(value, (dict, list)):
+            die(f"env_vars.{name} 必须是字符串、数字或布尔值")
+        normalized[name] = str(value)
+    return normalized
 
 
 # ============================================================================
@@ -528,6 +571,51 @@ def exec_command(node_ref, command, timeout=600):
         sock.close()
 
 
+def host_exec_command(node_ref, command, timeout=600):
+    """执行宿主机命令；容器命令必须改走 docker-exec。"""
+    if re.search(
+        r"(?:^|[\s;&|()'\"`])(?:[^\s;&|()'\"`]*/)?"
+        r"docker\s+(?:container\s+)?exec(?:\s|$)",
+        command,
+    ):
+        die(
+            "exec 只允许宿主机命令；检测到 docker exec，"
+            "请改用 ssh_utils.py docker-exec <node> <command>"
+        )
+    return exec_command(node_ref, command, timeout)
+
+
+def build_docker_exec_command(node, command):
+    """根据已解析节点构造宿主机 docker exec 命令。
+
+    参数通过 shlex.quote 逐项转义，env_vars 不经过模型或远程 Shell 拼接。
+    """
+    docker = node.get("docker") or {}
+    container_name = docker.get("name", "")
+    if not container_name or str(container_name).startswith("<"):
+        die("当前节点的 docker.name 未配置或为占位符")
+    if not isinstance(command, str) or not command.strip():
+        die("docker-exec 的容器命令不能为空")
+
+    argv = ["docker", "exec"]
+    for name, value in (node.get("env_vars") or {}).items():
+        argv.extend(["--env", f"{name}={value}"])
+
+    work_dir = docker.get("work_dir", "")
+    if work_dir:
+        argv.extend(["--workdir", str(work_dir)])
+
+    argv.extend([str(container_name), "bash", "-c", command])
+    return " ".join(shlex.quote(part) for part in argv)
+
+
+def docker_exec_command(node_ref, command, timeout=600):
+    """在节点容器中执行命令，并注入 service.yaml 的 env_vars。"""
+    node = resolve_node(node_ref)
+    host_command = build_docker_exec_command(node, command)
+    return exec_command(node_ref, host_command, timeout)
+
+
 def upload_file(node_ref, local_path, remote_path):
     """上传文件到远程节点。"""
     local_path = str(
@@ -622,10 +710,27 @@ def main():
     sub = parser.add_subparsers(dest="action", required=True)
 
     # exec
-    p_exec = sub.add_parser("exec", help="执行远程命令")
+    p_exec = sub.add_parser("exec", help="执行远程宿主机命令")
     p_exec.add_argument("node_ref", help="节点引用: standalone, pd-separated.p[0], pd-separated.d[0]")
     p_exec.add_argument("command", help="要执行的命令")
     p_exec.add_argument("--timeout", type=int, default=600, help="超时秒数，默认 600（10分钟）")
+
+    # docker-exec
+    p_docker_exec = sub.add_parser(
+        "docker-exec",
+        help="在节点容器内执行命令，并注入 env_vars 和 docker.work_dir",
+    )
+    p_docker_exec.add_argument(
+        "node_ref",
+        help="节点引用: standalone, pd-separated.p[0], pd-separated.d[0], eval",
+    )
+    p_docker_exec.add_argument("command", help="要在容器内执行的命令")
+    p_docker_exec.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help="超时秒数，默认 600（10分钟）",
+    )
 
     # status
     p_status = sub.add_parser("status", help="查看 daemon 状态")
@@ -668,7 +773,21 @@ def main():
 
     try:
         if args.action == "exec":
-            print_json(exec_command(args.node_ref, args.command, args.timeout))
+            print_json(
+                host_exec_command(
+                    args.node_ref,
+                    args.command,
+                    args.timeout,
+                )
+            )
+        elif args.action == "docker-exec":
+            print_json(
+                docker_exec_command(
+                    args.node_ref,
+                    args.command,
+                    args.timeout,
+                )
+            )
         elif args.action == "status":
             daemon_status(args.node_ref)
         elif args.action == "stop":

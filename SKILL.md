@@ -21,7 +21,7 @@ skills/vllm-ascend-developer/
 │   ├── aisbench.yaml               # 精度评测配置
 │   └── proxy.yaml                  # 网络代理配置
 ├── scripts/                        # 工具脚本
-│   ├── ssh_utils.py                # SSH 远程执行（exec/wait/upload/download）
+│   ├── ssh_utils.py                # SSH 远程执行（exec/docker-exec/wait/upload/download）
 │   ├── generate_curl.py            # 从 config/test.yaml 生成 curl 测试脚本
 │   └── curl_test.sh                # 自动生成的 curl 测试脚本（不要手动编辑）
 ├── docs/                           # 经验文档（调试方法、定位案例）
@@ -105,6 +105,8 @@ standalone:
     ...
 ```
 
+`env_vars` 必须写成 `变量名: 标量值`，不要填写 `export KEY=...` 或 Shell 片段。它只由 `docker-exec` 注入对应节点的容器；宿主机 `exec` 不注入这些变量。
+
 适用场景：单台 GPU/NPU 服务器，开发与部署在同一台机器
 
 ### PD分离模式（pd-separated）
@@ -157,7 +159,7 @@ pd-separated:
 ## 注意事项
 
 1. **只修改 vllm-ascend 代码** — 禁止修改 vLLM 源码
-2. **每个 ssh_utils exec 命令独立执行** — 不同 exec 调用之间不可用 `&&` 链式连接。`docker exec bash -c '...'` 内部的命令可以用 `;` 分隔（不用 `&&`，因为 `&&` 依赖前一个命令的退出码，可能导致后续命令被跳过）
+2. **区分宿主机与容器命令** — 宿主机命令使用 `ssh_utils.py exec`；容器命令必须使用 `ssh_utils.py docker-exec`，禁止手工拼接 `docker exec`。`docker-exec` 会合并全局/节点级 Docker 配置、注入当前节点的 `env_vars`，并默认使用 `docker.work_dir`。每次调用相互独立；同一容器命令内用 `;` 分隔步骤。
 3. **SSH 远程操作** — 所有远程命令统一通过 `scripts/ssh_utils.py` 执行，首次调用自动建立持久连接（Paramiko daemon），后续命令复用同一连接。参考：`python scripts/ssh_utils.py exec standalone "..."`
 4. **禁止擅自重装** — vLLM 和 vLLM-Ascend 已在容器内预装，未经用户同意禁止执行 `pip install` 等安装/覆盖操作
 5. **按端口杀进程** — 使用 `fuser -k {service_port}/tcp` 只杀占用服务端口的进程，不会误伤其他端口（如 8081）上的服务。杀完后用 `fuser {service_port}/tcp` 确认端口已释放

@@ -361,8 +361,8 @@ class PathPolicyTests(unittest.TestCase):
             self.project,
         )
         remote_substitution_command = (
-            f'python3 "{ssh_script}" exec standalone '
-            '"docker exec container bash -c \'tail \\$(ls -t /tmp | head -1)\'"'
+            f'python3 "{ssh_script}" docker-exec standalone '
+            '"tail \\$(ls -t /tmp | head -1)"'
         )
         path_policy.validate_bash_command(
             remote_substitution_command,

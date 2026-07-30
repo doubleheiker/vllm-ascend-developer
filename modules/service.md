@@ -21,7 +21,7 @@
 
 ## 单机模式流程（standalone）
 
-所有命令通过 `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "..."` 在目标机器的**宿主机**上执行。
+宿主机命令通过 `ssh_utils.py exec` 执行；容器命令通过 `ssh_utils.py docker-exec` 执行。`docker-exec` 会从 `service.yaml` 合并 Docker 配置、注入节点 `env_vars`，并将容器工作目录设为 `docker.work_dir`。禁止手工拼接 `docker exec`。
 
 ### 步骤 1：停止已有进程并清空 plog
 
@@ -40,7 +40,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "fuser -k {
 **1b. 清空 plog**（防止旧日志干扰本次定位）：
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} rm -rf /root/ascend/log/debug/plog/*; echo plog_cleared"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "rm -rf /root/ascend/log/debug/plog/*; echo plog_cleared"
 ```
 
 注意：每个命令单独执行，不可用 && 链式连接。
@@ -48,7 +48,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exe
 ### 步骤 2：启动服务
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} bash -c 'cd {docker.work_dir}; nohup bash {docker.startup_script} > {docker.log_file} 2>&1 &'; echo service_started"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "nohup bash {docker.startup_script} > {docker.log_file} 2>&1 &"
 ```
 
 ### 步骤 3：监控日志等待启动
@@ -62,14 +62,14 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait standalone "{docker.lo
 
 > **注意**：`wait` 依赖宿主机能直接读到 `{docker.log_file}`。如果宿主机容器路径不一致，改用：
 > ```bash
-> python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} grep 'Application startup complete' {docker.log_file} || echo not_ready"
+> python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "grep 'Application startup complete' {docker.log_file} || echo not_ready"
 > ```
 > 手工轮询直到匹配为止。
 
 也可手动查看进度：
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} tail -n 50 {docker.log_file}"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "tail -n 50 {docker.log_file}"
 ```
 
 ### 步骤 4：检查启动成功
@@ -79,7 +79,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exe
 - `Started server process`
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} grep -E 'Application startup complete|Started server process' {docker.log_file}"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "grep -E 'Application startup complete|Started server process' {docker.log_file}"
 ```
 
 ### 步骤 5：健康检查
@@ -88,7 +88,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exe
 
 ```bash
 # 用服务实际绑定的 IP（service.yaml 中的 standalone.host）
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} bash -c 'unset http_proxy; unset https_proxy; curl -s -o /dev/null -w \"%{http_code}\" --max-time 30 http://{standalone.host}:{standalone.service_port}/v1/models'"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "unset http_proxy; unset https_proxy; curl -s -o /dev/null -w \"%{http_code}\" --max-time 30 http://{standalone.host}:{standalone.service_port}/v1/models"
 # 必须返回 200
 ```
 
@@ -111,8 +111,8 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.p[0] "fus
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.d[0] "fuser -k {pd-separated.service_port}/tcp 2>/dev/null; sleep 2; echo d_killed"
 
 # 清空 plog
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.p[0] "docker exec {docker.name} rm -rf /root/ascend/log/debug/plog/*; echo plog_cleared"
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.d[0] "docker exec {docker.name} rm -rf /root/ascend/log/debug/plog/*; echo plog_cleared"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.p[0] "rm -rf /root/ascend/log/debug/plog/*; echo plog_cleared"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.d[0] "rm -rf /root/ascend/log/debug/plog/*; echo plog_cleared"
 ```
 
 ### 步骤 2：启动服务
@@ -121,12 +121,12 @@ P 节点和 D 节点分别启动各自的 proxy + vLLM 服务：
 
 ```bash
 # P 节点启动
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.p[0] "docker exec {docker.name} bash -c 'cd {docker.work_dir}; nohup bash {docker.proxy_script} > {docker.log_file} 2>&1 &'; echo p_proxy_started"
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.p[0] "docker exec {docker.name} bash -c 'cd {docker.work_dir}; nohup bash {docker.startup_script} > {docker.log_file} 2>&1 &'; echo p_service_started"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.p[0] "nohup bash {docker.proxy_script} > {docker.log_file} 2>&1 &"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.p[0] "nohup bash {docker.startup_script} > {docker.log_file} 2>&1 &"
 
 # D 节点同理
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.d[0] "docker exec {docker.name} bash -c 'cd {docker.work_dir}; nohup bash {docker.proxy_script} > {docker.log_file} 2>&1 &'; echo d_proxy_started"
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.d[0] "docker exec {docker.name} bash -c 'cd {docker.work_dir}; nohup bash {docker.startup_script} > {docker.log_file} 2>&1 &'; echo d_service_started"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.d[0] "nohup bash {docker.proxy_script} > {docker.log_file} 2>&1 &"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.d[0] "nohup bash {docker.startup_script} > {docker.log_file} 2>&1 &"
 ```
 
 ### 步骤 3-5：监控、检查、健康检查
@@ -134,8 +134,8 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.d[0] "doc
 与单机模式相同，分别对 P 和 D 节点执行。健康检查端口使用 `{pd-separated.service_port}`。
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.p[0] "docker exec {docker.name} tail -n 50 {docker.log_file}"
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.d[0] "docker exec {docker.name} tail -n 50 {docker.log_file}"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.p[0] "tail -n 50 {docker.log_file}"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.d[0] "tail -n 50 {docker.log_file}"
 ```
 
 ---

@@ -23,7 +23,7 @@
 
 ```bash
 # 运行测试
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "docker exec {docker.name} bash {docker.work_dir}/curl_test.sh"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "bash {docker.work_dir}/curl_test.sh"
 ```
 
 从 `ssh_utils.py` 返回 JSON 的 `stdout` 字段读取推理响应，再解析响应中的 `choices[0].text`；不要使用未经路径策略审计的本地 `python -c` 管道。

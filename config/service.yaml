@@ -15,8 +15,9 @@
 #   password:       SSH 密码
 #   work_dir:       宿主机工作目录（存放脚本或源码）
 #   service_port:   服务端口
-#   env_vars:       环境变量
-#     ASCEND_RT_VISIBLE_DEVICES:  可见的 Ascend 设备编号，逗号分隔, 例： export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+#   env_vars:       注入该节点容器命令的环境变量，由 ssh_utils.py docker-exec 消费
+#                   变量名必须符合 [A-Za-z_][A-Za-z0-9_]*，值必须是 YAML 标量
+#     ASCEND_RT_VISIBLE_DEVICES:  可见的 Ascend 设备编号，逗号分隔
 #   docker:         容器配置（可选，覆盖全局 docker 默认值）
 #
 # ===== Docker 字段说明 =====
@@ -35,6 +36,7 @@
 #
 # ===== 合并优先级 =====
 #   节点级 docker > 全局 docker 默认值
+#   env_vars 为节点专属配置，不与其他节点共享
 # ============================================================================
 
 # service.yaml

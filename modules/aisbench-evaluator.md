@@ -32,11 +32,11 @@
 3. 严禁在服务未就绪时发起 aisbench 评测
 
 ### 2. 评测机器远程操作
-评测机器的所有命令通过 `scripts/ssh_utils.py` 的 `eval` 节点执行。首次调用自动建立持久连接，后续复用。
+评测机器的所有命令通过 `scripts/ssh_utils.py` 的 `eval` 节点执行。宿主机命令使用 `exec`，容器命令使用 `docker-exec`；首次调用自动建立持久连接，后续复用。
 
 ```bash
 # 执行命令示例
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec eval "docker exec {eval_machine.docker.name} ..."
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec eval "..."
 ```
 
 ## 前置条件
@@ -83,18 +83,18 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec eval "curl -s -o /dev/
 
 ```bash
 # 1. 后台启动评测，输出写入日志
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec eval "docker exec {eval_machine.docker.name} bash -c 'cd {eval_machine.docker.work_dir} && nohup python3 aisbench_test.py --input_len {benchmark.input_len} --output_len {benchmark.output_len} --data_num {benchmark.data_num} --concurrency {benchmark.concurrency} --test_type {benchmark.test_type} --npu_num {benchmark.npu_num} > aisbench_output.log 2>&1 &' && echo started"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec eval "nohup python3 aisbench_test.py --input_len {benchmark.input_len} --output_len {benchmark.output_len} --data_num {benchmark.data_num} --concurrency {benchmark.concurrency} --test_type {benchmark.test_type} --npu_num {benchmark.npu_num} > aisbench_output.log 2>&1 &"
 
 # 2. 等待评测完成
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait eval "{eval_machine.docker.work_dir}/aisbench_output.log" "全量数据集测试完成" --timeout 7200
 
 # 3. 查看结果
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec eval "docker exec {eval_machine.docker.name} tail -n 80 {eval_machine.docker.work_dir}/aisbench_output.log"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec eval "tail -n 80 aisbench_output.log"
 ```
 
 如需评测特定数据集，直接调用 ais_bench：
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec eval "docker exec {eval_machine.docker.name} bash -c 'cd {eval_machine.docker.work_dir} && ais_bench --models vllm_api_general_chat --datasets gsm8k_gen_0_shot_cot_chat_prompt --dump-eval-details --debug 2>&1 | tee aisbench_output.log'"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec eval "ais_bench --models vllm_api_general_chat --datasets gsm8k_gen_0_shot_cot_chat_prompt --dump-eval-details --debug 2>&1 | tee aisbench_output.log"
 ```
 
 ### 步骤 4：解析评测结果（提取 accuracy）
@@ -108,11 +108,11 @@ aisbench 的输出包含类似以下格式的精度结果：
 
 ```bash
 # 提取 accuracy 值
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec eval "docker exec {eval_machine.docker.name} bash -c \"grep -oP 'accuracy.*?GEN' aisbench_output.log | head -1\""
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec eval "grep -oP 'accuracy.*?GEN' aisbench_output.log | head -1"
 # 输出示例：'accuracy': 83.83838383838383, 'type': 'GEN'
 
 # 提取 summary 文件路径（用于定位模型输出目录）
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec eval "docker exec {eval_machine.docker.name} bash -c \"grep 'write summary to' aisbench_output.log | grep -oP '/home/outputs/default/[^ ]+'\""
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec eval "grep 'write summary to' aisbench_output.log | grep -oP '/home/outputs/default/[^ ]+'"
 # 输出示例：/home/outputs/default/20260506_015425/summary/summary_20260506_015425.txt
 ```
 
@@ -132,31 +132,31 @@ aisbench 会将每条测试样本的模型输出保存到：
 
 ```bash
 # 查看输出目录结构
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec eval "docker exec {eval_machine.docker.name} bash -c 'ls /home/outputs/default/*/results/vllm-api-general-chat/ 2>/dev/null | head -20'"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec eval "ls /home/outputs/default/*/results/vllm-api-general-chat/ 2>/dev/null | head -20"
 
 # 抽样查看前几个输出文件
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec eval "docker exec {eval_machine.docker.name} bash -c 'head -100 /home/outputs/default/*/results/vllm-api-general-chat/*.json 2>/dev/null | head -200'"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec eval "head -100 /home/outputs/default/*/results/vllm-api-general-chat/*.json 2>/dev/null | head -200"
 ```
 
 #### 乱码检查
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec eval "docker exec {eval_machine.docker.name} bash -c '
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec eval "
     OUTPUT_DIR=/home/outputs/default/*/results/vllm-api-general-chat/
     grep -l \"��\\|�\\|\\\\x[0-9a-f][0-9a-f]\\|\\\\u[0-9a-f][0-9a-f][0-9a-f][0-9a-f]\" \${OUTPUT_DIR}*.json 2>/dev/null || echo \"no gibberish found\"
-  '"
+  "
 ```
 
 #### 复读检查
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec eval "docker exec {eval_machine.docker.name} bash -c '
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec eval "
     OUTPUT_DIR=/home/outputs/default/*/results/vllm-api-general-chat/
     for f in \${OUTPUT_DIR}*.json; do
         content=\$(python3 -c \"import json; d=json.load(open(\\\"\$f\\\")); print(d.get(\\\"pred\\\", d.get(\\\"output\\\", \\\"\\\")))\" 2>/dev/null)
         echo \"\$content\" | grep -oP \"(.{5,}).*\\\1.*\\\1.*\\\1\" && echo \"REPETITION FOUND in \$f\"
     done 2>/dev/null || echo \"no repetition check performed\"
-  '"
+  "
 ```
 
 > 提示：也可以通过人工抽样阅读几个典型输出来判断，效率更高。
