@@ -608,6 +608,25 @@ tests:
         self.assertIn("validate_upload_source", ssh_source)
         self.assertIn("validate_download_destination", ssh_source)
 
+    def test_sftp_success_responses_use_zero_exit_code(self):
+        source = (SCRIPTS / "ssh_utils.py").read_text(encoding="utf-8")
+        upload_block = source.split(
+            'elif action == "upload":',
+            1,
+        )[1].split('elif action == "download":', 1)[0]
+        download_block = source.split(
+            'elif action == "download":',
+            1,
+        )[1].split('elif action == "shutdown":', 1)[0]
+
+        for action, block in (
+            ("upload", upload_block),
+            ("download", download_block),
+        ):
+            with self.subTest(action=action):
+                self.assertIn('resp["success"] = True', block)
+                self.assertIn('resp["exit_code"] = 0', block)
+
     def test_runtime_docs_use_plugin_root_and_run_directory(self):
         runtime_docs = [
             ROOT / "skills" / "diagnose" / "SKILL.md",

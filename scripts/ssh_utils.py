@@ -414,6 +414,7 @@ def daemon_main(node_ref):
                     sftp.put(msg["local_path"], msg["remote_path"])
                     sftp.close()
                     resp["success"] = True
+                    resp["exit_code"] = 0
                 except Exception as e:
                     resp["stderr"] = str(e)
 
@@ -423,6 +424,7 @@ def daemon_main(node_ref):
                     sftp.get(msg["remote_path"], msg["local_path"])
                     sftp.close()
                     resp["success"] = True
+                    resp["exit_code"] = 0
                 except Exception as e:
                     resp["stderr"] = str(e)
 
