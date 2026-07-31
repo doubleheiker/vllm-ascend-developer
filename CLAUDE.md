@@ -25,20 +25,20 @@ service  test-runner  verifier  aisbench-evaluator  log-analyzer  auto-fixer
    └────────┴───────────┬───────────┘                  └──────┬──────┘
                         ▼                                     ▼
               scripts/ssh_utils.py          {model.vllm_ascend_source}  ← only place code is edited
-              (sole remote path)              .dev/runs/<run-id>/records/fix_N.md
+              (sole remote path)              .dev/run/records/fix_N.md
 ```
 
 Key cross-file concepts:
 
 - **Configuration is resolved project-first.** Real configuration belongs under `${CLAUDE_PROJECT_DIR}/.dev/config/`; the bundled `config/*.yaml` files are read-only templates. Every module references placeholders like `{standalone.service_port}`, `{docker.name}`, and `{vllm_ascend_source}`.
 - **`scripts/ssh_utils.py` is the ONLY way to touch a remote server.** It reads connection info from the resolved config directory (no `~/.ssh/config`), starts a persistent Paramiko daemon under `.dev/runtime/ssh-daemon/`, and reuses it. Passwords are passed in-memory, never on the command line. Idle daemons self-exit after 60 min.
-- **Local writes are machine-checked.** `scripts/path_policy.py` creates `.dev/runs/<run-id>/` and handles the Skill-scoped `PreToolUse` policy. Plugin files are read-only; generated scripts, downloads, logs, and records stay inside the active run.
+- **Local writes are machine-checked.** `scripts/path_policy.py` manages the project-owned `.dev/run/` workspace and the Skill-scoped `PreToolUse` policy. Run `bootstrap` at most once when entering a new diagnosis workflow; later modules reuse its `run_dir`. Every Claude session shares `generated/`, `downloads/`, `logs/`, and `records/`; read the returned `latest_records` before acting. Plugin files are read-only.
 - **Node references** resolve a logical name to connection info: `standalone`, `pd-separated.p[0]` / `pd-separated.d[0]` (Prefill/Decode nodes), and `eval` (aisbench machine, defined in `aisbench.yaml`).
-- **`test.yaml` is the single source of prompts.** `scripts/generate_curl.py` renders it into the active run's `generated/curl_test.sh` — never hand-write curl, or A/B comparisons break on prompt mismatch.
+- **`test.yaml` is the single source of prompts.** `scripts/generate_curl.py` renders it into `.dev/run/generated/curl_test.sh` — never hand-write curl, or A/B comparisons break on prompt mismatch.
 - **Two deployment modes**, selected by `mode:` in `service.yaml`:
   - `standalone` — prefill+decode mixed on one machine.
   - `pd-separated` — P nodes and D nodes on separate machines coordinated by a proxy (`proxy_script` is **required** in this mode; optional in standalone unless running distributed DP).
-- **The precision-diagnosis workflow is a strict loop** (`workflows/precision-diagnosis.md`): start service → health check → test → verify → (analyze log → patch code → restart → retest). Each full iteration is recorded in the active run's `records/fix_N.md` (N increments).
+- **The precision-diagnosis workflow is a strict loop** (`workflows/precision-diagnosis.md`): start service → health check → test → verify → (analyze log → patch code → restart → retest). Each full iteration is recorded in `.dev/run/records/fix_N.md` (N increments).
 - **Precision debugging methodology** lives in `docs/` (not just examples): inject `DEBUG-CMP-FINAL out_sum=...` per attention layer, run two configs into separate logs (`service_A.log`/`service_B.log`), diff per-layer `out_sum` to find the first divergence (>1% is abnormal). See `docs/dcp2tp4-precision-fix.md` (float32→float64 LSE merge) and `docs/pcp-hybrid-nan-fix.md` (`fill_()` write-back trap).
 
 ## Commands
@@ -53,7 +53,7 @@ python -c "import paramiko, yaml; print('ok')"   # verify
 Remote execution (run from the user project; Plugin paths are absolute):
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/path_policy.py" bootstrap
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/path_policy.py" bootstrap            # check/ensure fixed .dev/run once per workflow
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec   standalone|pd-separated.p[0]|pd-separated.d[0]|eval "<cmd>"
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec <node> "<container-cmd>"
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait   <node> "<logfile>" "<keyword>" --timeout 900 --interval 30
@@ -67,7 +67,7 @@ Test generation:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate_curl.py" [--dry-run] [--test-index N] [--prompt-index N]
-# → writes <active-run>/generated/curl_test.sh
+# → writes .dev/run/generated/curl_test.sh
 ```
 
 HyperScript installer (repo root, separate from the skill):
@@ -88,7 +88,7 @@ bash HyperScript/HyperScript.sh --check-npu | --kill-all | --stop-all-containers
 5. **Health check (HTTP 200 on `/v1/models`) is a strict precondition** before any inference request or aisbench run. Use the **real bound IP** (`standalone.host`), not `localhost` — the server binds `--host` to an external IP. Inside the container, `unset http_proxy; unset https_proxy` first or you'll get a 504.
 6. **Code edits need no reinstall** (host and container share the same vllm/vllm-ascend mount). Edit via `ssh_utils exec cat/sed` or `upload`, then restart the container service. Python-only changes take effect on restart; changes under `csrc/` require recompile+reinstall.
 7. **Startup takes 10+ minutes.** `wait` for `Application startup complete` in the log. When diagnosing errors, read **from that keyword onward** — later errors are usually cascades.
-8. **Per-iteration record:** every modify→restart→retest cycle writes `<active-run>/records/fix_N.md` (N=1,2,…).
+8. **Per-iteration record:** every modify→restart→retest cycle writes `.dev/run/records/fix_N.md` (N=1,2,…).
 9. **Clear plog before each restart** (`rm -rf /root/ascend/log/debug/plog/*`) so NPU logs match the current run.
 10. **Use the Tsinghua pip mirror** (`-i https://pypi.tsinghua.edu.cn/simple`) — default PyPI commonly times out.
 11. **Filter logs to one rank** with `dist.get_rank() == 0` to avoid multi-rank spam.

@@ -3,6 +3,7 @@
 从项目私有 config/test.yaml 或 Plugin 模板生成 curl 测试脚本。
 
 用法：
+    # 本工作流尚未执行 bootstrap 时，先检查并补齐固定 .dev/run
     python3 "${CLAUDE_PLUGIN_ROOT}/scripts/path_policy.py" bootstrap
     python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate_curl.py"
     python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate_curl.py" --dry-run
@@ -17,9 +18,9 @@ import sys
 import yaml
 
 from path_policy import (
-    get_active_run_dir,
     get_config_dir,
     get_project_root,
+    get_run_dir,
     validate_local_write,
 )
 
@@ -93,7 +94,7 @@ curl {endpoint} \\
     if args.dry_run:
         print(script)
     else:
-        run_dir = get_active_run_dir(project_root)
+        run_dir = get_run_dir(project_root)
         output = validate_local_write(
             run_dir / "generated" / "curl_test.sh",
             project_root,

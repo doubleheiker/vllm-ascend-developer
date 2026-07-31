@@ -45,7 +45,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate_curl.py"
 **2b. 执行测试：**
 
 ```bash
-# 1) 从 test.yaml 生成到当前安全运行目录
+# 1) 从 test.yaml 生成到固定安全工作区
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate_curl.py"
 
 # 2) 上传到宿主机工作目录；该目录需映射到容器 work_dir

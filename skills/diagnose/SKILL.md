@@ -21,16 +21,16 @@ hooks:
 
 Plugin 安装目录 `${CLAUDE_PLUGIN_ROOT}` 只读。所有本地配置和运行结果只能写入用户项目 `${CLAUDE_PROJECT_DIR}/.dev/`。
 
-开始诊断时只执行一次 `bootstrap`，由脚本幂等复制缺失配置模板并初始化唯一运行目录：
+进入一个新的诊断工作流时，最多执行一次 `bootstrap`。它以当前 workspace 的文件系统为准，检查并补齐缺失配置与目录，同时始终复用项目唯一的 `${CLAUDE_PROJECT_DIR}/.dev/run/`；不要按会话创建目录：
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/path_policy.py" \
   --project-root "${CLAUDE_PROJECT_DIR}" bootstrap
 ```
 
-不要预先用 `ls` 检查配置目录，不要手工执行 `mkdir` 或 `cp`。读取返回的 `copied`、`existing` 和 `new_templates_copied`：已有配置永不覆盖；当 `new_templates_copied` 为 `true` 时，告知用户填写新复制的配置并停止，等待用户确认后再继续。该字段只表示本次复制了新模板，不代表已有配置已经通过工作流校验。
+不要预先用 `ls` 检查配置目录，不要手工执行 `mkdir` 或 `cp`。如果本次工作流已经成功执行过 `bootstrap` 并保存了返回的 `run_dir`，后续模块直接复用，不要重复执行；新会话或无法确认时再执行一次。当 `new_templates_copied=true` 时，告知用户填写新复制的配置并停止；该字段不代表配置已校验。其余情况下，在执行远程操作前读取返回的 `latest_records`，恢复同一 workspace 中已有的过程上下文。
 
-保存命令返回的 `run_dir`，本轮生成脚本写入 `generated/`、下载文件写入 `downloads/`、日志写入 `logs/`、修复记录写入 `records/`。禁止在 Plugin 源目录、workspace 外或未激活的 run 中生成文件。Hook 拒绝操作时，用中文解释原因，不要通过其他工具或命令绕过。
+使用命令返回的固定 `run_dir`：生成脚本写入 `generated/`、下载文件写入 `downloads/`、日志写入 `logs/`、修复记录写入 `records/`。不同 Claude 会话共享这些目录。禁止在 Plugin 源目录、workspace 外或 `.dev/run/` 外生成运行文件。Hook 拒绝操作时，用中文解释原因，不要通过其他工具或命令绕过。
 
 初始化时会创建 `${CLAUDE_PROJECT_DIR}/.dev/.gitignore`，统一忽略项目私有配置、凭据、daemon 状态和全部运行产物。
 
@@ -191,7 +191,7 @@ pd-separated:
 4. **禁止擅自重装** — vLLM 和 vLLM-Ascend 已在容器内预装，未经用户同意禁止执行 `pip install` 等安装/覆盖操作
 5. **按端口杀进程** — 使用 `fuser -k {service_port}/tcp` 只杀占用服务端口的进程，不会误伤其他端口（如 8081）上的服务。杀完后用 `fuser {service_port}/tcp` 确认端口已释放
 6. **服务就绪后执行 aisbench** — aisbench 精度评测必须在 vLLM 服务完全启动并通过健康检查（`curl http://host:port/v1/models` 返回 200）之后才能执行，严禁在服务未就绪时发起评测
-7. **迭代记录** — 每次修改记录到当前 `{run_dir}/records/fix_N.md`
+7. **迭代记录** — 每次修改记录到固定 `{run_dir}/records/fix_N.md`
 8. **启动耗时** — vLLM 服务启动通常需要 10 分钟以上
 9. **服务器环境** — 需要目标服务器已安装 Docker
 10. **配置一致性** — 启动脚本和测试脚本中的端口、模型名称必须一致

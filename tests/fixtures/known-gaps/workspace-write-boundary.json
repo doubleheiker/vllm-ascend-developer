@@ -5,7 +5,7 @@
   "artifact_root": "/workspace/project/.dev",
   "cases": [
     {
-      "path": "/workspace/project/.dev/runs/run-001/state.json",
+      "path": "/workspace/project/.dev/run/records/state.json",
       "expected_decision": "allow"
     },
     {

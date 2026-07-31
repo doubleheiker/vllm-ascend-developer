@@ -89,7 +89,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" upload standalone "{run_dir
 
 PD分离模式下将 `standalone` 替换为对应节点引用（`pd-separated.p[0]` / `pd-separated.d[0]`）。
 
-### 步骤 4：记录修复到当前 run
+### 步骤 4：记录修复到固定工作区
 
 记录文件必须位于 `{run_dir}/records/fix_N.md`，禁止写入 Plugin 目录或 workspace 根目录。
 
@@ -112,7 +112,7 @@ PD分离模式下将 `standalone` 替换为对应节点引用（`pd-separated.p[
 {待验证}
 ```
 
-其中 N 从 1 开始递增。如果当前 run 已有 fix_1.md、fix_2.md，则新建 fix_3.md。
+其中 N 从 1 开始递增。如果 `{run_dir}/records/` 已有 fix_1.md、fix_2.md，则新建 fix_3.md。
 
 ### 步骤 5：应用修复并重启验证
 

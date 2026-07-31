@@ -218,7 +218,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.p[
 
 每次完整循环（第 2 步到第 7 步）为一个迭代。
 
-- 每次循环对应当前 run 中的一个 `records/fix_N.md` 记录文件
+- 每次循环对应固定 `{run_dir}` 中的一个 `records/fix_N.md` 记录文件
 - 当前循环的修改不会影响上次的修改——所有修改累积叠加
 - 如果三次迭代未解决，建议：
   1. 重新评估问题定位是否准确

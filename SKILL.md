@@ -9,6 +9,10 @@ description: vLLM/vLLM-Ascend 通用开发 skill，覆盖精度诊断、服务�
 
 本 skill 用于 vLLM + vLLM-Ascend 框架下的开发与调试工作，覆盖推理精度诊断、服务管理、自动化测试与代码修复等场景。采用模块化设计，支持单机和PD分离两种部署模式。
 
+## 固定工作区
+
+将 `${CLAUDE_PROJECT_DIR}` 视为 Skill 的主工作区。每个新诊断工作流最多执行一次 `path_policy.py bootstrap`，用于检查并补齐固定 `.dev/run/`；同一工作流的后续步骤直接复用返回的 `run_dir`。所有 Claude 会话共享其中的 `generated/`、`downloads/`、`logs/` 和 `records/`；继续工作前读取返回的 `latest_records`。
+
 ## 目录结构
 
 ```
@@ -23,7 +27,7 @@ skills/vllm-ascend-developer/
 ├── scripts/                        # 工具脚本
 │   ├── ssh_utils.py                # SSH 远程执行（exec/docker-exec/wait/upload/download）
 │   ├── generate_curl.py            # 从 config/test.yaml 生成 curl 测试脚本
-│   └── curl_test.sh                # 自动生成的 curl 测试脚本（不要手动编辑）
+│   └── path_policy.py              # 固定工作区与本地路径安全策略
 ├── docs/                           # 经验文档（调试方法、定位案例）
 │   ├── dcp2tp4-precision-fix.md    # DCP 精度调试：逐层对比、float64 merge
 │   └── pcp-hybrid-nan-fix.md       # PCP NaN：bool mask fill_() 不写回

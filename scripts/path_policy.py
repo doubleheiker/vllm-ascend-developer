@@ -9,8 +9,6 @@ import os
 import re
 import shlex
 import sys
-import uuid
-from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 
@@ -22,8 +20,9 @@ if hasattr(sys.stderr, "reconfigure"):
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 STATE_DIR_NAME = ".dev"
-ACTIVE_RUN_FILE = "active-run.json"
-RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
+RUN_DIR_NAME = "run"
+RUN_SUBDIR_NAMES = ("generated", "downloads", "logs", "records")
+MAX_RECENT_RECORDS = 20
 CONFIG_FILE_NAMES = (
     "service.yaml",
     "test.yaml",
@@ -156,10 +155,8 @@ def workspace_paths(project_root=None):
         "project": project,
         "state": state,
         "config": state / "config",
-        "runs": state / "runs",
+        "run": state / RUN_DIR_NAME,
         "runtime": state / "runtime",
-        "active_run_file": state / ACTIVE_RUN_FILE,
-        "active_run_temp_file": state / "active-run.tmp",
         "state_ignore_file": state / ".gitignore",
     }
     resolved_state = state.resolve(strict=False)
@@ -167,76 +164,92 @@ def workspace_paths(project_root=None):
         raise PathPolicyError(
             f"{STATE_DIR_NAME} 通过符号链接越过 workspace: {resolved_state}"
         )
-    for name in ("config", "runs", "runtime"):
+    for name in ("config", "run", "runtime"):
         resolved = paths[name].resolve(strict=False)
         if not is_within(resolved, resolved_state):
             raise PathPolicyError(
                 f"{STATE_DIR_NAME}/{name} 通过符号链接越过状态目录: {resolved}"
             )
-    for name in (
-        "active_run_file",
-        "active_run_temp_file",
-        "state_ignore_file",
-    ):
-        resolved = paths[name].resolve(strict=False)
-        if not is_within(resolved, resolved_state):
-            raise PathPolicyError(
-                f"{paths[name].name} 通过符号链接越过状态目录: {resolved}"
-            )
+    resolved_ignore = paths["state_ignore_file"].resolve(strict=False)
+    if not is_within(resolved_ignore, resolved_state):
+        raise PathPolicyError(
+            f"{paths['state_ignore_file'].name} 通过符号链接越过状态目录: "
+            f"{resolved_ignore}"
+        )
     return paths
 
 
-def initialize_run(project_root=None, run_id=None):
-    """创建一次运行的唯一目录，并将其设为当前活动运行。"""
-    paths = workspace_paths(project_root)
-    if run_id is None:
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        run_id = f"{stamp}-{uuid.uuid4().hex[:8]}"
-    if not RUN_ID_RE.fullmatch(run_id):
+def _validate_run_layout(paths, create=False):
+    run_path = paths["run"]
+    if run_path.is_symlink():
+        raise PathPolicyError(f"固定运行目录禁止使用符号链接: {run_path}")
+    if create:
+        run_path.mkdir(parents=True, exist_ok=True)
+    if not run_path.is_dir():
         raise PathPolicyError(
-            "run-id 只能包含字母、数字、点、下划线和连字符，且长度不超过 81"
+            f"固定运行目录不存在；请先执行 path_policy.py bootstrap: {run_path}"
         )
 
-    run_dir = (paths["runs"] / run_id).resolve(strict=False)
-    if not is_within(run_dir, paths["runs"]):
-        raise PathPolicyError("run-id 解析后越过 runs 目录")
+    run_dir = run_path.resolve(strict=False)
+    if not is_within(run_dir, paths["state"]):
+        raise PathPolicyError(f"固定运行目录越过 .dev: {run_dir}")
+    for name in RUN_SUBDIR_NAMES:
+        subdir_path = run_path / name
+        if subdir_path.is_symlink():
+            raise PathPolicyError(
+                f"运行子目录禁止使用符号链接: {subdir_path}"
+            )
+        if create:
+            subdir_path.mkdir(exist_ok=True)
+        subdir = subdir_path.resolve(strict=False)
+        if not is_within(subdir, run_dir):
+            raise PathPolicyError(
+                f"运行子目录越过固定 run: {subdir}"
+            )
+        if not subdir.is_dir():
+            raise PathPolicyError(f"运行子目录不存在: {subdir}")
+    return run_dir
 
+
+def _recent_record_files(run_dir):
+    records = (Path(run_dir) / "records").resolve(strict=False)
+    candidates = []
+    for candidate in records.rglob("*"):
+        resolved = candidate.resolve(strict=False)
+        if (
+            candidate.is_file()
+            and not candidate.is_symlink()
+            and is_within(resolved, records)
+        ):
+            candidates.append((candidate.stat().st_mtime_ns, resolved))
+    candidates.sort(
+        key=lambda item: (item[0], item[1].as_posix()),
+        reverse=True,
+    )
+    return [
+        str(path)
+        for _, path in candidates[:MAX_RECENT_RECORDS]
+    ]
+
+
+def initialize_workspace(project_root=None):
+    """幂等创建项目唯一的固定运行工作区。"""
+    paths = workspace_paths(project_root)
     paths["config"].mkdir(parents=True, exist_ok=True)
     paths["runtime"].mkdir(parents=True, exist_ok=True)
-    paths["runs"].mkdir(parents=True, exist_ok=True)
+    run_dir = _validate_run_layout(paths, create=True)
     paths["state_ignore_file"].write_text(
         "# 由 vllm-ascend-developer 管理：配置、凭据和运行产物禁止提交\n"
         "*\n",
         encoding="utf-8",
     )
-    try:
-        run_dir.mkdir()
-    except FileExistsError as exc:
-        raise PathPolicyError(
-            f"run-id 已存在，拒绝复用旧运行目录: {run_id}"
-        ) from exc
-    for name in ("generated", "downloads", "logs", "records"):
-        (run_dir / name).mkdir()
-
-    payload = {
-        "run_id": run_id,
-        "run_dir": str(Path("runs") / run_id),
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    paths["state"].mkdir(parents=True, exist_ok=True)
-    temp_file = paths["active_run_temp_file"]
-    temp_file.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    temp_file.replace(paths["active_run_file"])
     return {
-        "run_id": run_id,
         "run_dir": run_dir,
         "generated": run_dir / "generated",
         "downloads": run_dir / "downloads",
         "logs": run_dir / "logs",
         "records": run_dir / "records",
+        "latest_records": _recent_record_files(run_dir),
     }
 
 
@@ -287,40 +300,28 @@ def initialize_config_templates(project_root=None):
     }
 
 
-def bootstrap_project(project_root=None, run_id=None):
-    """一次完成配置模板初始化和当前 run 创建。"""
-    config_result = initialize_config_templates(project_root)
-    run_result = initialize_run(project_root, run_id)
+def bootstrap_project(project_root=None):
+    """幂等检查并补齐配置和项目唯一的固定运行工作区。"""
+    project = get_project_root(project_root)
+    run_result = initialize_workspace(project)
+    config_result = initialize_config_templates(project)
     return {
         **config_result,
         **run_result,
     }
 
 
-def get_active_run_dir(project_root=None, required=True):
-    paths = workspace_paths(project_root)
-    active_file = paths["active_run_file"]
-    if not active_file.is_file():
+def get_run_dir(project_root=None, required=True):
+    """返回项目唯一的固定运行目录。"""
+    project = get_project_root(project_root)
+    paths = workspace_paths(project)
+    if not paths["run"].exists() and not paths["run"].is_symlink():
         if required:
             raise PathPolicyError(
-                "尚未初始化运行目录；请先执行 path_policy.py bootstrap"
+                "尚未初始化固定运行目录；请先执行 path_policy.py bootstrap"
             )
         return None
-
-    try:
-        payload = json.loads(active_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise PathPolicyError(f"活动运行记录不可读: {exc}") from exc
-
-    relative = payload.get("run_dir", "")
-    if not isinstance(relative, str) or not relative:
-        raise PathPolicyError("活动运行记录缺少 run_dir")
-    run_dir = _resolve_local_path(relative, paths["state"])
-    if not is_within(run_dir, paths["runs"]):
-        raise PathPolicyError("活动运行目录越过 .dev/runs")
-    if required and not run_dir.is_dir():
-        raise PathPolicyError(f"活动运行目录不存在: {run_dir}")
-    return run_dir
+    return _validate_run_layout(paths, create=False)
 
 
 def validate_local_write(path, project_root=None, cwd=None, allow_runtime=False):
@@ -328,11 +329,11 @@ def validate_local_write(path, project_root=None, cwd=None, allow_runtime=False)
     project = get_project_root(project_root)
     target = _resolve_local_path(path, cwd or project)
     paths = workspace_paths(project)
-    active_run = get_active_run_dir(project, required=False)
+    run_dir = get_run_dir(project, required=False)
 
     allowed_roots = [paths["config"]]
-    if active_run is not None:
-        allowed_roots.append(active_run)
+    if run_dir is not None:
+        allowed_roots.append(run_dir)
     if allow_runtime:
         allowed_roots.append(paths["runtime"])
 
@@ -340,16 +341,16 @@ def validate_local_write(path, project_root=None, cwd=None, allow_runtime=False)
         return target
     if is_within(target, PLUGIN_ROOT):
         raise PathPolicyError(
-            f"拒绝写入 Plugin 源目录: {target}；运行结果必须写入 .dev/runs"
+            f"拒绝写入 Plugin 源目录: {target}；运行结果必须写入 .dev/run"
         )
     if not is_within(target, project):
         raise PathPolicyError(f"拒绝写入 workspace 外路径: {target}")
-    if is_within(target, paths["runs"]) and active_run is None:
+    if is_within(target, paths["run"]) and run_dir is None:
         raise PathPolicyError(
-            "拒绝写入未初始化的 runs 目录；请先执行 path_policy.py bootstrap"
+            "拒绝写入未初始化的固定 run 目录；请先执行 path_policy.py bootstrap"
         )
     raise PathPolicyError(
-        f"拒绝写入非运行目录: {target}；只允许当前 run 或 .dev/config"
+        f"拒绝写入非运行目录: {target}；只允许 .dev/run 或 .dev/config"
     )
 
 
@@ -366,11 +367,11 @@ def validate_upload_source(path, project_root=None, cwd=None):
 def validate_download_destination(path, project_root=None, cwd=None):
     project = get_project_root(project_root)
     target = _resolve_local_path(path, cwd or project)
-    run_dir = get_active_run_dir(project)
+    run_dir = get_run_dir(project)
     downloads = run_dir / "downloads"
     if not is_within(target, downloads):
         raise PathPolicyError(
-            f"拒绝下载到当前 run 的 downloads 之外: {target}"
+            f"拒绝下载到 .dev/run/downloads 之外: {target}"
         )
     return target
 
@@ -789,18 +790,28 @@ def _print_json(data):
     print(json.dumps(data, ensure_ascii=False))
 
 
+def _json_ready(value):
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {
+            key: _json_ready(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    return value
+
+
 def main():
     parser = argparse.ArgumentParser(description="vLLM-Ascend 路径安全策略")
     parser.add_argument("--project-root", help="用户项目根目录")
     sub = parser.add_subparsers(dest="action", required=True)
 
-    p_init = sub.add_parser("init-run", help="初始化安全运行目录")
-    p_init.add_argument("--run-id")
-    p_bootstrap = sub.add_parser(
+    sub.add_parser(
         "bootstrap",
-        help="复制缺失配置模板并初始化安全运行目录",
+        help="幂等检查并补齐配置和项目唯一的 .dev/run 工作区",
     )
-    p_bootstrap.add_argument("--run-id")
     sub.add_parser("paths", help="显示当前安全路径")
     sub.add_parser("hook", help="处理 Claude Code PreToolUse JSON")
     p_check = sub.add_parser("check-write", help="检查本地写入路径")
@@ -819,33 +830,17 @@ def main():
 
     project = get_project_root(args.project_root)
     try:
-        if args.action == "init-run":
-            result = initialize_run(project, args.run_id)
-            _print_json(
-                {
-                    "success": True,
-                    **{key: str(value) for key, value in result.items()},
-                }
-            )
-        elif args.action == "bootstrap":
-            result = bootstrap_project(project, args.run_id)
-            _print_json(
-                {
-                    "success": True,
-                    **{
-                        key: str(value) if isinstance(value, Path) else value
-                        for key, value in result.items()
-                    },
-                }
-            )
+        if args.action == "bootstrap":
+            result = bootstrap_project(project)
+            _print_json({"success": True, **_json_ready(result)})
         elif args.action == "paths":
             paths = workspace_paths(project)
-            run_dir = get_active_run_dir(project, required=False)
+            run_dir = get_run_dir(project, required=False)
             _print_json(
                 {
                     "success": True,
                     **{key: str(value) for key, value in paths.items()},
-                    "active_run": str(run_dir) if run_dir else None,
+                    "run_dir": str(run_dir) if run_dir else None,
                 }
             )
         elif args.action == "check-write":

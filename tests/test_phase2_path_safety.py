@@ -23,21 +23,26 @@ class PathPolicyTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory(prefix="路径安全-")
         self.project = Path(self.temp_dir.name) / "中文 workspace"
         self.project.mkdir()
-        self.run = path_policy.initialize_run(
-            self.project,
-            "run-001",
-        )
+        self.run = path_policy.initialize_workspace(self.project)
 
     def tearDown(self):
         self.temp_dir.cleanup()
 
     def test_run_layout_is_single_and_utf8_safe(self):
         self.assertEqual(
-            path_policy.get_active_run_dir(self.project),
+            path_policy.get_run_dir(self.project),
             self.run["run_dir"],
+        )
+        self.assertEqual(
+            self.run["run_dir"],
+            (self.project / ".dev" / "run").resolve(),
         )
         for name in ("generated", "downloads", "logs", "records"):
             self.assertTrue((self.run["run_dir"] / name).is_dir())
+        self.assertFalse((self.project / ".dev" / "runs").exists())
+        self.assertFalse(
+            (self.project / ".dev" / "active-run.json").exists()
+        )
         self.assertTrue(
             (self.project / ".dev" / "config").is_dir()
         )
@@ -49,11 +54,8 @@ class PathPolicyTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("*\n", state_ignore)
         self.assertNotIn("!.gitignore", state_ignore)
-        with self.assertRaisesRegex(
-            path_policy.PathPolicyError,
-            "拒绝复用旧运行目录",
-        ):
-            path_policy.initialize_run(self.project, "run-001")
+        repeated = path_policy.initialize_workspace(self.project)
+        self.assertEqual(repeated["run_dir"], self.run["run_dir"])
 
     def test_local_state_name_does_not_overlap_product_name(self):
         self.assertEqual(path_policy.STATE_DIR_NAME, ".dev")
@@ -90,16 +92,14 @@ class PathPolicyTests(unittest.TestCase):
             )
 
     def test_bootstrap_copies_templates_once_without_overwrite(self):
-        first = path_policy.bootstrap_project(
-            self.project,
-            "run-bootstrap-1",
-        )
+        first = path_policy.bootstrap_project(self.project)
         self.assertEqual(
             set(first["copied"]),
             set(path_policy.CONFIG_FILE_NAMES),
         )
         self.assertEqual(first["existing"], [])
         self.assertTrue(first["new_templates_copied"])
+        self.assertEqual(first["run_dir"], self.run["run_dir"])
 
         config_dir = first["config_dir"]
         service_yaml = config_dir / "service.yaml"
@@ -108,22 +108,39 @@ class PathPolicyTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        second = path_policy.bootstrap_project(
-            self.project,
-            "run-bootstrap-2",
-        )
+        second = path_policy.bootstrap_project(self.project)
         self.assertEqual(second["copied"], [])
         self.assertEqual(
             set(second["existing"]),
             set(path_policy.CONFIG_FILE_NAMES),
         )
         self.assertFalse(second["new_templates_copied"])
+        self.assertEqual(second["run_dir"], self.run["run_dir"])
         self.assertEqual(
             service_yaml.read_text(encoding="utf-8"),
             "# 用户配置，禁止覆盖\nmode: standalone\n",
         )
 
-    def test_local_writes_are_limited_to_config_and_active_run(self):
+    def test_bootstrap_is_idempotent_across_sessions(self):
+        project = Path(self.temp_dir.name) / "跨会话 workspace"
+        project.mkdir()
+
+        first = path_policy.bootstrap_project(project)
+        record = first["records"] / "需求进度.md"
+        record.write_text("已经完成第一阶段\n", encoding="utf-8")
+        second = path_policy.bootstrap_project(project)
+
+        self.assertEqual(first["run_dir"], second["run_dir"])
+        self.assertEqual(
+            first["run_dir"],
+            (project / ".dev" / "run").resolve(),
+        )
+        self.assertIn(
+            str(record.resolve()),
+            second["latest_records"],
+        )
+
+    def test_local_writes_are_limited_to_config_and_fixed_run(self):
         allowed_record = self.run["records"] / "修复 1.md"
         allowed_config = (
             self.project
@@ -173,7 +190,7 @@ class PathPolicyTests(unittest.TestCase):
                 self.project,
             )
 
-    def test_path_traversal_cannot_escape_active_run(self):
+    def test_path_traversal_cannot_escape_fixed_run(self):
         escaped = self.run["run_dir"] / ".." / ".." / "escaped.md"
         with self.assertRaises(path_policy.PathPolicyError):
             path_policy.validate_local_write(
@@ -198,7 +215,7 @@ class PathPolicyTests(unittest.TestCase):
             path_policy.PathPolicyError,
             "符号链接越过 workspace",
         ):
-            path_policy.initialize_run(symlink_project, "run-escape")
+            path_policy.initialize_workspace(symlink_project)
 
     def test_write_and_edit_hooks_return_structured_chinese_denial(self):
         outside = self.project.parent / "outside.md"
@@ -323,7 +340,7 @@ class PathPolicyTests(unittest.TestCase):
             path_policy.validate_bash_command(
                 (
                     f'python3 "{policy_script}" '
-                    f'--project-root "{outside.as_posix()}" init-run'
+                    f'--project-root "{outside.as_posix()}" bootstrap'
                 ),
                 self.project,
             )
@@ -345,7 +362,7 @@ class PathPolicyTests(unittest.TestCase):
             path_policy.validate_bash_command(
                 (
                     f'VLLM_ASCEND_PROJECT_ROOT="{outside.as_posix()}" '
-                    f'python3 "{policy_script}" init-run'
+                    f'python3 "{policy_script}" bootstrap'
                 ),
                 self.project,
             )
@@ -445,8 +462,6 @@ class PathSafetyIntegrationTests(unittest.TestCase):
                     "--project-root",
                     str(project),
                     "bootstrap",
-                    "--run-id",
-                    "run-bootstrap-cli",
                 ],
                 cwd=project,
                 capture_output=True,
@@ -466,12 +481,44 @@ class PathSafetyIntegrationTests(unittest.TestCase):
             self.assertTrue(output["new_templates_copied"])
             self.assertTrue(Path(output["run_dir"]).is_dir())
             self.assertTrue(Path(output["config_dir"]).is_dir())
+            record = Path(output["records"]) / "跨会话记录.md"
+            record.write_text("继续处理同一需求", encoding="utf-8")
 
-    def test_generate_curl_writes_only_to_active_run(self):
+            resumed = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(SCRIPTS / "path_policy.py"),
+                    "--project-root",
+                    str(project),
+                    "bootstrap",
+                ],
+                cwd=project,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                check=False,
+            )
+            self.assertEqual(
+                resumed.returncode,
+                0,
+                resumed.stderr,
+            )
+            resumed_output = json.loads(resumed.stdout)
+            self.assertEqual(
+                resumed_output["run_dir"],
+                output["run_dir"],
+            )
+            self.assertIn(
+                str(record.resolve()),
+                resumed_output["latest_records"],
+            )
+
+    def test_generate_curl_writes_only_to_fixed_run(self):
         with tempfile.TemporaryDirectory(prefix="curl生成-") as raw:
             project = Path(raw) / "项目 with space"
             project.mkdir()
-            run = path_policy.initialize_run(project, "run-curl")
+            run = path_policy.initialize_workspace(project)
             config = project / ".dev" / "config"
             (config / "test.yaml").write_text(
                 """
@@ -583,6 +630,16 @@ tests:
         skill_source = runtime_docs[0].read_text(encoding="utf-8")
         self.assertIn("path_policy.py", skill_source)
         self.assertIn("bootstrap", skill_source)
+        self.assertIn("latest_records", skill_source)
+        self.assertIn(".dev/run/", skill_source)
+        self.assertIn("最多执行一次 `bootstrap`", skill_source)
+        self.assertIn("后续模块直接复用", skill_source)
+        self.assertIn("不要按会话创建目录", skill_source)
+        self.assertNotIn("run_action", skill_source)
+        self.assertNotIn("run_id", skill_source)
+        self.assertNotIn("active-run", skill_source)
+        self.assertNotIn("resume-run", skill_source)
+        self.assertNotIn(".dev/runs", skill_source)
         self.assertNotIn("cp -n", skill_source)
         self.assertIn("不要预先用 `ls`", skill_source)
 
