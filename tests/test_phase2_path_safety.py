@@ -645,6 +645,48 @@ tests:
                 self.assertIn('resp["success"] = True', block)
                 self.assertIn('resp["exit_code"] = 0', block)
 
+    def test_execute_success_is_derived_from_remote_exit_code(self):
+        source = (SCRIPTS / "ssh_utils.py").read_text(encoding="utf-8")
+        execute_block = source.split(
+            'if action == "execute":',
+            1,
+        )[1].split('elif action == "upload":', 1)[0]
+
+        self.assertIn(
+            'resp["success"] = resp["exit_code"] == 0',
+            execute_block,
+        )
+        self.assertNotIn('resp["success"] = True', execute_block)
+
+    def test_curl_upload_and_container_execution_use_same_shared_path(self):
+        shared_script = "{standalone.work_dir}/curl_test.sh"
+        wrong_script = "{docker.work_dir}/curl_test.sh"
+        test_runner = (ROOT / "modules" / "test-runner.md").read_text(
+            encoding="utf-8"
+        )
+        verifier = (ROOT / "modules" / "verifier.md").read_text(
+            encoding="utf-8"
+        )
+        workflow = (
+            ROOT / "workflows" / "precision-diagnosis.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            f'upload standalone "{{run_dir}}/generated/curl_test.sh" "{shared_script}"',
+            test_runner,
+        )
+        for path, source in (
+            ("modules/test-runner.md", test_runner),
+            ("modules/verifier.md", verifier),
+            ("workflows/precision-diagnosis.md", workflow),
+        ):
+            with self.subTest(path=path):
+                self.assertIn(
+                    f'docker-exec standalone "bash {shared_script}"',
+                    source,
+                )
+                self.assertNotIn(f"bash {wrong_script}", source)
+
     def test_runtime_docs_use_plugin_root_and_run_directory(self):
         runtime_docs = [
             ROOT / "skills" / "diagnose" / "SKILL.md",

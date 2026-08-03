@@ -48,14 +48,14 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate_curl.py"
 # 1) 从 test.yaml 生成到固定安全工作区
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate_curl.py"
 
-# 2) 上传到宿主机工作目录；该目录需映射到容器 work_dir
+# 2) 上传到宿主机/容器共享脚本目录；该目录与 docker.startup_script 所在目录一致
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" upload standalone "{run_dir}/generated/curl_test.sh" "{standalone.work_dir}/curl_test.sh"
 
-# 3) 在容器内执行
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "bash {docker.work_dir}/curl_test.sh"
+# 3) 在容器内沿用上传后的同一绝对路径，不要改写为 docker.work_dir
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "bash {standalone.work_dir}/curl_test.sh"
 ```
 
-> **设计原则**：`test.yaml` 是 prompt 的**唯一数据源**。`generate_curl.py` 从中生成 curl 脚本，消除手动拼写不一致的风险。每次修改 test.yaml 后重新生成即可。
+> **设计原则**：`test.yaml` 是 prompt 的**唯一数据源**。`generate_curl.py` 从中生成 curl 脚本，消除手动拼写不一致的风险。每次修改 test.yaml 后重新生成即可。节点 `work_dir` 是 `docker.startup_script` 所在的宿主机/容器共享脚本目录；`docker.work_dir` 只是容器命令的默认 cwd，不能替换上传目标路径。
 
 ### 步骤 3：检查响应
 

@@ -258,7 +258,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait standalone "{docker.wo
 # 3) 执行测试
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate_curl.py"
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" upload standalone "{run_dir}/generated/curl_test.sh" "{standalone.work_dir}/curl_test.sh"
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "bash {docker.work_dir}/curl_test.sh"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "bash {standalone.work_dir}/curl_test.sh"
 ```
 
 ### 2. 配置 B（待测）跑测试

@@ -421,7 +421,7 @@ def daemon_main(node_ref):
                     resp["stdout"] = stdout.read().decode("utf-8", errors="replace")
                     resp["stderr"] = stderr.read().decode("utf-8", errors="replace")
                     resp["exit_code"] = stdout.channel.recv_exit_status()
-                    resp["success"] = True
+                    resp["success"] = resp["exit_code"] == 0
                 except Exception as e:
                     resp["stderr"] = str(e)
 
