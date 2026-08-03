@@ -13,7 +13,7 @@
 #   port:           SSH 端口，默认 22
 #   username:       SSH 用户名
 #   password:       SSH 密码
-#   work_dir:       宿主机工作目录（存放脚本或源码）
+#   work_dir:       宿主机工作目录；exec 和相对传输路径默认以此为基准
 #   service_port:   服务端口
 #   env_vars:       注入该节点容器命令的环境变量，由 ssh_utils.py docker-exec 消费
 #                   变量名必须符合 [A-Za-z_][A-Za-z0-9_]*，值必须是 YAML 标量
@@ -22,7 +22,7 @@
 #
 # ===== Docker 字段说明 =====
 #   name:            容器名称
-#   work_dir:        容器内工作目录
+#   work_dir:        容器内工作目录；docker-exec 默认以此为 cwd
 #   startup_script:  vLLM 服务启动脚本路径
 #   proxy_script:    proxy 启动脚本路径
 #                    - standalone: 可选，分布式 DP 场景必配

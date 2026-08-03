@@ -32,7 +32,7 @@
 3. 严禁在服务未就绪时发起 aisbench 评测
 
 ### 2. 评测机器远程操作
-评测机器的所有命令通过 `scripts/ssh_utils.py` 的 `eval` 节点执行。宿主机命令使用 `exec`，容器命令使用 `docker-exec`；首次调用自动建立持久连接，后续复用。
+评测机器的所有命令通过 `scripts/ssh_utils.py` 的 `eval` 节点执行。宿主机命令使用 `exec` 并从 `eval_machine.work_dir` 开始，容器命令使用 `docker-exec` 并从 `eval_machine.docker.work_dir` 开始；首次调用自动建立持久连接，后续复用。
 
 ```bash
 # 执行命令示例
@@ -86,7 +86,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec eval "curl -s -o /dev/
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec eval "nohup python3 aisbench_test.py --input_len {benchmark.input_len} --output_len {benchmark.output_len} --data_num {benchmark.data_num} --concurrency {benchmark.concurrency} --test_type {benchmark.test_type} --npu_num {benchmark.npu_num} > aisbench_output.log 2>&1 &"
 
 # 2. 等待评测完成
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait eval "{eval_machine.docker.work_dir}/aisbench_output.log" "全量数据集测试完成" --timeout 7200
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait eval "{eval_machine.docker.work_dir}/aisbench_output.log" "全量数据集测试完成" --scope container --timeout 7200
 
 # 3. 查看结果
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec eval "tail -n 80 aisbench_output.log"

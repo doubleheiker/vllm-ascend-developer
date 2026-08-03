@@ -376,8 +376,8 @@ def validate_download_destination(path, project_root=None, cwd=None):
     return target
 
 
-def validate_remote_path(path, allowed_roots, operation):
-    """校验 SFTP 远程路径是否为允许根目录下的绝对 POSIX 路径。"""
+def validate_remote_path(path, allowed_roots, operation, base_dir=None):
+    """校验 SFTP 远程路径；相对路径按给定远程工作目录解析。"""
     raw = str(path)
     if not raw or "\x00" in raw or "\n" in raw or "\r" in raw:
         raise PathPolicyError(f"{operation}远程路径为空或包含控制字符")
@@ -385,8 +385,20 @@ def validate_remote_path(path, allowed_roots, operation):
         raise PathPolicyError(f"{operation}远程路径禁止使用通配符: {raw}")
 
     candidate = PurePosixPath(raw)
-    if not candidate.is_absolute() or ".." in candidate.parts:
-        raise PathPolicyError(f"{operation}远程路径必须是无 .. 的绝对路径: {raw}")
+    if ".." in candidate.parts:
+        raise PathPolicyError(f"{operation}远程路径禁止包含 ..: {raw}")
+    if not candidate.is_absolute():
+        base_raw = str(base_dir or "")
+        base_path = PurePosixPath(base_raw)
+        if (
+            not base_raw
+            or not base_path.is_absolute()
+            or ".." in base_path.parts
+        ):
+            raise PathPolicyError(
+                f"{operation}相对远程路径缺少合法的 work_dir: {raw}"
+            )
+        candidate = base_path / candidate
 
     normalized_roots = []
     for root in allowed_roots:

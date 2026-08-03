@@ -56,7 +56,7 @@ Remote execution (run from the user project; Plugin paths are absolute):
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/path_policy.py" bootstrap            # check/ensure fixed .dev/run once per workflow
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec   standalone|pd-separated.p[0]|pd-separated.d[0]|eval "<cmd>"
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec <node> "<container-cmd>"
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait   <node> "<logfile>" "<keyword>" --timeout 900 --interval 30
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait   <node> "<logfile>" "<keyword>" --scope container --timeout 900 --interval 30  # use host for host logs
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" upload <node> <local> <remote>
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" download <node> <remote> <local>
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" status <node>
@@ -82,7 +82,7 @@ bash HyperScript/HyperScript.sh --check-npu | --kill-all | --stop-all-containers
 ## Critical invariants (non-obvious — all called out in SKILL.md / modules)
 
 1. **Only edit `vllm-ascend` code.** Never modify vLLM upstream (`{model.vllm_source}` is read-only reference).
-2. **Each SSH command is independent.** Use `exec` only for the remote host and `docker-exec` only for the configured container. `docker-exec` injects the node's `env_vars`, applies merged Docker config, and starts in `docker.work_dir`. Never hand-write `docker exec`. Inside one container command, separate steps with `;` rather than `&&`.
+2. **Each SSH command is independent.** Use `exec` only for the remote host; it starts in the node's `work_dir`. Use `docker-exec` only for the configured container; it injects `env_vars` and starts in `docker.work_dir`. Absolute paths and explicit `cd` remain available for remote source work. Never hand-write `docker exec`. Inside one container command, separate steps with `;` rather than `&&`.
 3. **Don't reinstall.** vLLM and vLLM-Ascend are preinstalled in the container; do not `pip install` them without explicit user approval.
 4. **Kill by port, not by name:** `fuser -k {service_port}/tcp` (then `fuser {service_port}/tcp` to confirm free). For PD-separated, kill proxy_port too if configured.
 5. **Health check (HTTP 200 on `/v1/models`) is a strict precondition** before any inference request or aisbench run. Use the **real bound IP** (`standalone.host`), not `localhost` — the server binds `--host` to an external IP. Inside the container, `unset http_proxy; unset https_proxy` first or you'll get a 504.

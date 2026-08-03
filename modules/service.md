@@ -21,7 +21,7 @@
 
 ## 单机模式流程（standalone）
 
-宿主机命令通过 `ssh_utils.py exec` 执行；容器命令通过 `ssh_utils.py docker-exec` 执行。`docker-exec` 会从 `service.yaml` 合并 Docker 配置、注入节点 `env_vars`，并将容器工作目录设为 `docker.work_dir`。禁止手工拼接 `docker exec`。
+宿主机命令通过 `ssh_utils.py exec` 执行并默认从节点 `work_dir` 开始；容器命令通过 `ssh_utils.py docker-exec` 执行并默认从 `docker.work_dir` 开始，同时注入节点 `env_vars`。绝对路径和显式 `cd` 仍可使用；禁止手工拼接 `docker exec`。
 
 ### 步骤 1：停止已有进程并清空 plog
 
@@ -57,14 +57,10 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "noh
 
 ```bash
 # 等待启动完成（每 30s 检查一次，最多等 15 分钟）
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait standalone "{docker.log_file}" "Application startup complete" --timeout 900 --interval 30
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait standalone "{docker.log_file}" "Application startup complete" --scope container --timeout 900 --interval 30
 ```
 
-> **注意**：`wait` 依赖宿主机能直接读到 `{docker.log_file}`。如果宿主机容器路径不一致，改用：
-> ```bash
-> python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "grep 'Application startup complete' {docker.log_file} || echo not_ready"
-> ```
-> 手工轮询直到匹配为止。
+> **注意**：`--scope container` 会在配置的容器及其 `docker.work_dir` 中读取日志；宿主机日志改用 `--scope host`。
 
 也可手动查看进度：
 

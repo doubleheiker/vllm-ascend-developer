@@ -170,7 +170,15 @@ class ServiceEnvironmentTests(unittest.TestCase):
                 timeout=45,
             )
 
-        self.assertEqual(result, {"success": True})
+        self.assertEqual(
+            result,
+            {
+                "success": True,
+                "node_ref": "standalone",
+                "scope": "container",
+                "cwd": "/service",
+            },
+        )
         args = execute.call_args.args
         self.assertEqual(args[0], "standalone")
         self.assertEqual(args[2], 45)
@@ -189,6 +197,137 @@ class ServiceEnvironmentTests(unittest.TestCase):
                 "env",
             ],
         )
+
+    def test_host_exec_starts_in_node_work_dir_and_reports_context(self):
+        node = {
+            "work_dir": "/host/work dir",
+            "docker": {},
+        }
+        with (
+            patch.object(
+                ssh_utils,
+                "resolve_node",
+                return_value=node,
+            ),
+            patch.object(
+                ssh_utils,
+                "exec_command",
+                return_value={"success": True, "stdout": "/host/work dir\n"},
+            ) as execute,
+        ):
+            result = ssh_utils.host_exec_command(
+                "standalone",
+                "pwd",
+                timeout=12,
+            )
+
+        self.assertEqual(
+            execute.call_args.args,
+            (
+                "standalone",
+                "cd '/host/work dir' || exit 1; pwd",
+                12,
+            ),
+        )
+        self.assertEqual(result["node_ref"], "standalone")
+        self.assertEqual(result["scope"], "host")
+        self.assertEqual(result["cwd"], "/host/work dir")
+
+    def test_exec_work_dirs_fail_closed_only_when_used(self):
+        cases = (
+            (None, "节点 work_dir"),
+            ("relative/path", "节点 work_dir"),
+            ("/", "节点 work_dir"),
+        )
+        for value, marker in cases:
+            with self.subTest(value=value):
+                output = io.StringIO()
+                with redirect_stdout(output), self.assertRaises(SystemExit):
+                    ssh_utils.build_host_exec_command(
+                        {"work_dir": value},
+                        "pwd",
+                    )
+                self.assertIn(marker, output.getvalue())
+
+        output = io.StringIO()
+        with redirect_stdout(output), self.assertRaises(SystemExit):
+            ssh_utils.build_docker_exec_command(
+                {"docker": {"name": "service", "work_dir": ""}},
+                "pwd",
+            )
+        self.assertIn("docker.work_dir", output.getvalue())
+
+    def test_eval_node_keeps_host_and_container_work_dirs_separate(self):
+        config = {
+            "eval_machine": {
+                "host": "192.0.2.20",
+                "password": "secret",
+                "work_dir": "/eval/host",
+                "docker": {
+                    "name": "eval-container",
+                    "work_dir": "/eval/container",
+                },
+            }
+        }
+        with patch.object(
+            ssh_utils,
+            "load_aisbench_config",
+            return_value=config,
+        ):
+            node = ssh_utils.resolve_node("eval")
+
+        self.assertEqual(node["work_dir"], "/eval/host")
+        self.assertEqual(node["docker"]["work_dir"], "/eval/container")
+
+    def test_wait_uses_explicit_host_or_container_scope(self):
+        node = {
+            "work_dir": "/host/work",
+            "docker": {
+                "name": "service",
+                "work_dir": "/container/work",
+            },
+        }
+        for scope, expected_cwd, runner_name, other_name in (
+            ("host", "/host/work", "host_exec_command", "docker_exec_command"),
+            (
+                "container",
+                "/container/work",
+                "docker_exec_command",
+                "host_exec_command",
+            ),
+        ):
+            with self.subTest(scope=scope):
+                with (
+                    patch.object(
+                        ssh_utils,
+                        "resolve_node",
+                        return_value=node,
+                    ),
+                    patch.object(
+                        ssh_utils,
+                        runner_name,
+                        return_value={
+                            "success": True,
+                            "stdout": "Application startup complete\n",
+                        },
+                    ) as selected,
+                    patch.object(ssh_utils, other_name) as unselected,
+                ):
+                    result = ssh_utils.wait_for_keyword(
+                        "standalone",
+                        "service log.txt",
+                        "Application startup complete",
+                        interval=0,
+                        timeout=1,
+                        scope=scope,
+                    )
+
+                selected.assert_called_once()
+                unselected.assert_not_called()
+                command = selected.call_args.args[1]
+                self.assertIn("'service log.txt'", command)
+                self.assertEqual(result["scope"], scope)
+                self.assertEqual(result["cwd"], expected_cwd)
 
     def test_host_exec_rejects_handwritten_docker_exec(self):
         commands = (
@@ -235,6 +374,14 @@ class ServiceEnvironmentTests(unittest.TestCase):
             combined,
         )
         self.assertIn("注入节点 `env_vars`", combined)
+        wait_lines = [
+            line
+            for line in combined.splitlines()
+            if 'ssh_utils.py" wait ' in line
+        ]
+        self.assertTrue(wait_lines)
+        for line in wait_lines:
+            self.assertIn("--scope container", line)
 
 
 if __name__ == "__main__":

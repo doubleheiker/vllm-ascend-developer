@@ -11,6 +11,7 @@
 # ===== 字段说明 =====
 #   eval_machine:          评测机器连接信息
 #     host/port/user/password:  SSH 连接参数
+#     work_dir:                评测机宿主机工作目录，exec 和相对传输路径以此为基准
 #     docker:                   容器配置
 #       name:                   容器名称
 #       work_dir:               aisbench_auto_tools_prefix 所在目录
@@ -55,6 +56,7 @@ eval_machine:
   port: 22                                                             # SSH 端口
   username: "root"                                                     # SSH 用户名
   password: "<your-password>"                                         # SSH 密码
+  work_dir: "/path/to/aisbench/host-work"                             # 宿主机工作目录
   docker:                                                              # 容器配置
     name: "aisbench-dev"                                             # 容器名称
     work_dir: "/path/to/aisbench/tools"                               # 工具目录

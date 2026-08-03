@@ -416,7 +416,7 @@ class PathPolicyTests(unittest.TestCase):
                 self.project,
             )
 
-    def test_remote_paths_require_absolute_allowlisted_locations(self):
+    def test_remote_paths_resolve_relative_to_allowlisted_work_dir(self):
         roots = ["/home/user/vllm-ascend", "/home/user/workspace"]
         self.assertEqual(
             path_policy.validate_remote_path(
@@ -425,6 +425,15 @@ class PathPolicyTests(unittest.TestCase):
                 "上传",
             ),
             "/home/user/vllm-ascend/vllm_ascend/file.py",
+        )
+        self.assertEqual(
+            path_policy.validate_remote_path(
+                "debug/output.log",
+                roots,
+                "上传",
+                base_dir="/home/user/workspace",
+            ),
+            "/home/user/workspace/debug/output.log",
         )
         for target in (
             "/home/user/vllm/file.py",
@@ -438,6 +447,15 @@ class PathPolicyTests(unittest.TestCase):
                         roots,
                         "上传",
                     )
+        with self.assertRaisesRegex(
+            path_policy.PathPolicyError,
+            "缺少合法的 work_dir",
+        ):
+            path_policy.validate_remote_path(
+                "relative.log",
+                roots,
+                "下载",
+            )
         with self.assertRaisesRegex(
             path_policy.PathPolicyError,
             "没有配置",

@@ -14,7 +14,7 @@
 
 ### 约束 1：SSH 远程操作
 
-所有远程操作通过 `scripts/ssh_utils.py` 执行。首次调用自动建立持久连接（daemon），后续命令复用同一连接。
+所有远程操作通过 `scripts/ssh_utils.py` 执行。宿主机 `exec` 默认从节点 `work_dir` 开始，容器 `docker-exec` 默认从 `docker.work_dir` 开始；绝对路径和显式 `cd` 仍可使用。首次调用自动建立持久连接（daemon），后续命令复用同一连接。
 
 ```bash
 # 单机模式
@@ -78,11 +78,11 @@ ls {model.model_path}
 
 ```bash
 # 单机模式
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait standalone "{docker.log_file}" "Application startup complete" --timeout 3600
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait standalone "{docker.log_file}" "Application startup complete" --scope container --timeout 3600
 
 # PD分离模式 — 分别等 P 和 D 节点
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait pd-separated.p[0] "{docker.log_file}" "Application startup complete" --timeout 3600
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait pd-separated.d[0] "{docker.log_file}" "Application startup complete" --timeout 3600
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait pd-separated.p[0] "{docker.log_file}" "Application startup complete" --scope container --timeout 3600
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait pd-separated.d[0] "{docker.log_file}" "Application startup complete" --scope container --timeout 3600
 ```
 
 #### 2b. 检查启动结果
@@ -253,7 +253,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.p[
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "nohup bash {docker.startup_script} > {docker.work_dir}/service_A.log 2>&1 &"
 
 # 2) 等待启动 + 健康检查
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait standalone "{docker.work_dir}/service_A.log" "Application startup complete" --timeout 900
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait standalone "{docker.work_dir}/service_A.log" "Application startup complete" --scope container --timeout 900
 
 # 3) 执行测试
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/generate_curl.py"

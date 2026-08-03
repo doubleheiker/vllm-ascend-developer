@@ -6,8 +6,9 @@ vllm-ascend-developer SSH 工具 — 基于 service.yaml 的远程执行模块�
 - 从 config/service.yaml 读取节点连接信息，无需 ~/.ssh/config
 - 持久连接 daemon：首次连接后复用，避免反复 SSH 握手
 - 密码通过 Paramiko 内存传递，不暴露在命令行
-- 支持 exec / docker-exec / upload / download / status / stop
+- 支持 exec / docker-exec / upload / download / wait / status / stop
 - docker-exec 从节点配置注入 env_vars，并合并节点级/全局 Docker 配置
+- exec 与 docker-exec 分别从节点 work_dir 与 docker.work_dir 开始执行
 
 用法：
     python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "hostname"
@@ -29,7 +30,7 @@ import sys
 import time
 import traceback
 from hashlib import md5
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from threading import Thread
 
 from path_policy import (
@@ -197,7 +198,7 @@ def _extract_eval_node(n):
         "port": n.get("port", 22),
         "username": n.get("username", "root"),
         "password": n.get("password", ""),
-        "work_dir": docker.get("work_dir", ""),
+        "work_dir": n.get("work_dir", ""),
         "env_vars": _normalize_env_vars(n.get("env_vars")),
         "docker": docker,
     }
@@ -239,6 +240,22 @@ def _normalize_env_vars(raw):
             die(f"env_vars.{name} 必须是字符串、数字或布尔值")
         normalized[name] = str(value)
     return normalized
+
+
+def _require_remote_work_dir(value, label):
+    """校验用于默认 cwd 的远程 POSIX 绝对目录。"""
+    raw = str(value or "").strip()
+    path = PurePosixPath(raw)
+    if (
+        not raw
+        or raw.startswith("<")
+        or any(char in raw for char in "\x00\n\r")
+        or not path.is_absolute()
+        or ".." in path.parts
+        or path == PurePosixPath("/")
+    ):
+        die(f"{label} 必须是非根目录的远程绝对路径，当前值: {raw!r}")
+    return str(path)
 
 
 # ============================================================================
@@ -538,9 +555,8 @@ def daemon_status(node_ref):
 # ============================================================================
 
 
-def _remote_transfer_roots(node_ref, operation):
+def _remote_transfer_roots(node, operation):
     """按节点与模型配置生成 SFTP 允许目录。"""
-    node = resolve_node(node_ref)
     model = load_model_config()
     work_dir = node.get("work_dir", "")
     ascend_source = model.get("vllm_ascend_source", "")
@@ -573,8 +589,26 @@ def exec_command(node_ref, command, timeout=600):
         sock.close()
 
 
+def _with_execution_context(response, node_ref, scope, cwd):
+    """为远程操作响应增加非敏感执行上下文。"""
+    result = dict(response or {})
+    result.update({"node_ref": node_ref, "scope": scope, "cwd": cwd})
+    return result
+
+
+def build_host_exec_command(node, command):
+    """将宿主机命令固定从节点 work_dir 开始执行。"""
+    if not isinstance(command, str) or not command.strip():
+        die("exec 的宿主机命令不能为空")
+    work_dir = _require_remote_work_dir(
+        node.get("work_dir"),
+        "节点 work_dir",
+    )
+    return f"cd {shlex.quote(work_dir)} || exit 1; {command}"
+
+
 def host_exec_command(node_ref, command, timeout=600):
-    """执行宿主机命令；容器命令必须改走 docker-exec。"""
+    """从节点 work_dir 执行宿主机命令；容器命令改走 docker-exec。"""
     if re.search(
         r"(?:^|[\s;&|()'\"`])(?:[^\s;&|()'\"`]*/)?"
         r"docker\s+(?:container\s+)?exec(?:\s|$)",
@@ -584,7 +618,19 @@ def host_exec_command(node_ref, command, timeout=600):
             "exec 只允许宿主机命令；检测到 docker exec，"
             "请改用 ssh_utils.py docker-exec <node> <command>"
         )
-    return exec_command(node_ref, command, timeout)
+    node = resolve_node(node_ref)
+    work_dir = _require_remote_work_dir(
+        node.get("work_dir"),
+        "节点 work_dir",
+    )
+    host_command = build_host_exec_command(node, command)
+    response = exec_command(node_ref, host_command, timeout)
+    return _with_execution_context(
+        response,
+        node_ref,
+        "host",
+        work_dir,
+    )
 
 
 def build_docker_exec_command(node, command):
@@ -603,9 +649,11 @@ def build_docker_exec_command(node, command):
     for name, value in (node.get("env_vars") or {}).items():
         argv.extend(["--env", f"{name}={value}"])
 
-    work_dir = docker.get("work_dir", "")
-    if work_dir:
-        argv.extend(["--workdir", str(work_dir)])
+    work_dir = _require_remote_work_dir(
+        docker.get("work_dir"),
+        "docker.work_dir",
+    )
+    argv.extend(["--workdir", work_dir])
 
     argv.extend([str(container_name), "bash", "-c", command])
     return " ".join(shlex.quote(part) for part in argv)
@@ -614,12 +662,27 @@ def build_docker_exec_command(node, command):
 def docker_exec_command(node_ref, command, timeout=600):
     """在节点容器中执行命令，并注入 service.yaml 的 env_vars。"""
     node = resolve_node(node_ref)
+    work_dir = _require_remote_work_dir(
+        (node.get("docker") or {}).get("work_dir"),
+        "docker.work_dir",
+    )
     host_command = build_docker_exec_command(node, command)
-    return exec_command(node_ref, host_command, timeout)
+    response = exec_command(node_ref, host_command, timeout)
+    return _with_execution_context(
+        response,
+        node_ref,
+        "container",
+        work_dir,
+    )
 
 
 def upload_file(node_ref, local_path, remote_path):
     """上传文件到远程节点。"""
+    node = resolve_node(node_ref)
+    work_dir = _require_remote_work_dir(
+        node.get("work_dir"),
+        "节点 work_dir",
+    )
     local_path = str(
         validate_upload_source(
             local_path,
@@ -628,25 +691,37 @@ def upload_file(node_ref, local_path, remote_path):
     )
     remote_path = validate_remote_path(
         remote_path,
-        _remote_transfer_roots(node_ref, "上传"),
+        _remote_transfer_roots(node, "上传"),
         "上传",
+        base_dir=work_dir,
     )
     ensure_daemon(node_ref)
     info = read_daemon_info(node_ref)
     sock = socket.create_connection(("127.0.0.1", info["port"]), timeout=30)
     try:
         _send_msg(sock, {"action": "upload", "local_path": local_path, "remote_path": remote_path})
-        return _recv_msg(sock)
+        return _with_execution_context(
+            _recv_msg(sock),
+            node_ref,
+            "host",
+            work_dir,
+        )
     finally:
         sock.close()
 
 
 def download_file(node_ref, remote_path, local_path):
     """从远程节点下载文件。"""
+    node = resolve_node(node_ref)
+    work_dir = _require_remote_work_dir(
+        node.get("work_dir"),
+        "节点 work_dir",
+    )
     remote_path = validate_remote_path(
         remote_path,
-        _remote_transfer_roots(node_ref, "下载"),
+        _remote_transfer_roots(node, "下载"),
         "下载",
+        base_dir=work_dir,
     )
     local_path = validate_download_destination(
         local_path,
@@ -659,31 +734,81 @@ def download_file(node_ref, remote_path, local_path):
     sock = socket.create_connection(("127.0.0.1", info["port"]), timeout=30)
     try:
         _send_msg(sock, {"action": "download", "remote_path": remote_path, "local_path": local_path})
-        return _recv_msg(sock)
+        return _with_execution_context(
+            _recv_msg(sock),
+            node_ref,
+            "host",
+            work_dir,
+        )
     finally:
         sock.close()
 
 
-def wait_for_keyword(node_ref, log_file, keyword, interval=30, timeout=3600):
+def wait_for_keyword(
+    node_ref,
+    log_file,
+    keyword,
+    interval=30,
+    timeout=3600,
+    scope="host",
+):
     """轮询远程日志文件，等待关键词出现或超时。
 
     返回 {"matched": true/false, "line": "匹配行", "elapsed": 秒数}
     """
+    if scope not in {"host", "container"}:
+        die("wait scope 只能是 host 或 container")
+    node = resolve_node(node_ref)
+    if scope == "host":
+        cwd = _require_remote_work_dir(
+            node.get("work_dir"),
+            "节点 work_dir",
+        )
+        run_command = host_exec_command
+    else:
+        cwd = _require_remote_work_dir(
+            (node.get("docker") or {}).get("work_dir"),
+            "docker.work_dir",
+        )
+        run_command = docker_exec_command
+
     started = time.time()
     while True:
         elapsed = time.time() - started
         if elapsed > timeout:
-            return {"success": True, "matched": False, "line": "", "elapsed": elapsed}
+            return _with_execution_context(
+                {
+                    "success": True,
+                    "matched": False,
+                    "line": "",
+                    "elapsed": elapsed,
+                },
+                node_ref,
+                scope,
+                cwd,
+            )
 
-        resp = exec_command(
+        resp = run_command(
             node_ref,
-            f"grep -m 1 '{keyword}' {log_file} 2>/dev/null || echo __NOT_FOUND__",
+            "grep -m 1 -- "
+            f"{shlex.quote(keyword)} {shlex.quote(log_file)} "
+            "2>/dev/null || echo __NOT_FOUND__",
             timeout=60,
         )
         if resp.get("success") and "__NOT_FOUND__" not in resp.get("stdout", ""):
             line = resp["stdout"].strip()
             if line:
-                return {"success": True, "matched": True, "line": line, "elapsed": elapsed}
+                return _with_execution_context(
+                    {
+                        "success": True,
+                        "matched": True,
+                        "line": line,
+                        "elapsed": elapsed,
+                    },
+                    node_ref,
+                    scope,
+                    cwd,
+                )
 
         time.sleep(interval)
 
@@ -712,7 +837,10 @@ def main():
     sub = parser.add_subparsers(dest="action", required=True)
 
     # exec
-    p_exec = sub.add_parser("exec", help="执行远程宿主机命令")
+    p_exec = sub.add_parser(
+        "exec",
+        help="从节点 work_dir 执行远程宿主机命令",
+    )
     p_exec.add_argument("node_ref", help="节点引用: standalone, pd-separated.p[0], pd-separated.d[0]")
     p_exec.add_argument("command", help="要执行的命令")
     p_exec.add_argument("--timeout", type=int, default=600, help="超时秒数，默认 600（10分钟）")
@@ -720,7 +848,7 @@ def main():
     # docker-exec
     p_docker_exec = sub.add_parser(
         "docker-exec",
-        help="在节点容器内执行命令，并注入 env_vars 和 docker.work_dir",
+        help="从 docker.work_dir 执行容器命令，并注入 env_vars",
     )
     p_docker_exec.add_argument(
         "node_ref",
@@ -743,13 +871,19 @@ def main():
     p_stop.add_argument("node_ref")
 
     # upload
-    p_up = sub.add_parser("upload", help="上传文件")
+    p_up = sub.add_parser(
+        "upload",
+        help="上传文件；相对远程路径基于节点 work_dir",
+    )
     p_up.add_argument("node_ref")
     p_up.add_argument("local_path")
     p_up.add_argument("remote_path")
 
     # download
-    p_down = sub.add_parser("download", help="下载文件")
+    p_down = sub.add_parser(
+        "download",
+        help="下载文件；相对远程路径基于节点 work_dir",
+    )
     p_down.add_argument("node_ref")
     p_down.add_argument("remote_path")
     p_down.add_argument("local_path")
@@ -759,6 +893,12 @@ def main():
     p_wait.add_argument("node_ref")
     p_wait.add_argument("log_file", help="远程日志文件路径")
     p_wait.add_argument("keyword", help="完成关键词")
+    p_wait.add_argument(
+        "--scope",
+        choices=("host", "container"),
+        default="host",
+        help="日志所在范围，默认 host",
+    )
     p_wait.add_argument("--interval", type=int, default=30, help="轮询间隔秒数，默认 30")
     p_wait.add_argument("--timeout", type=int, default=3600, help="最大等待秒数，默认 3600")
 
@@ -799,7 +939,16 @@ def main():
         elif args.action == "download":
             print_json(download_file(args.node_ref, args.remote_path, args.local_path))
         elif args.action == "wait":
-            print_json(wait_for_keyword(args.node_ref, args.log_file, args.keyword, args.interval, args.timeout))
+            print_json(
+                wait_for_keyword(
+                    args.node_ref,
+                    args.log_file,
+                    args.keyword,
+                    args.interval,
+                    args.timeout,
+                    args.scope,
+                )
+            )
     except PathPolicyError as exc:
         die(str(exc))
 
