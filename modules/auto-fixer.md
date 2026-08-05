@@ -118,15 +118,9 @@ PD分离模式下将 `standalone` 替换为对应节点引用（`pd-separated.p[
 
 宿主机和容器内的 vllm/vllm-ascend 目录默认一致，本地改代码后直接重启容器内服务即可生效（无需 `docker cp` 或 `pip install`）：
 
-```bash
-# 1. 停服务
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "fuser -k {service_port}/tcp 2>/dev/null"
+严格执行 **service.md** 中对应模式的停止和启动命令。standalone 必须先停止容器内记录的 PID 进程组，再执行宿主机端口清理，然后用 `setsid` 启动并重新写入 `vllm.pid`。不要在本模块另行拼接 `kill`、`fuser` 或启动命令。
 
-# 2. 重启
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "nohup bash {docker.startup_script} > {docker.log_file} 2>&1 &"
-
-# 3. 等待就绪 → 健康检查 → 跑测试验证
-```
+随后等待就绪 → 健康检查 → 跑测试验证。
 
 > **注意**：只修改 Python 代码（`vllm_ascend/` 下）无需重新编译。如果修改了 `csrc/` 下的算子源码，需要重新编译安装。
 

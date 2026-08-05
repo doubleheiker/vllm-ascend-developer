@@ -27,7 +27,13 @@
 
 ### 步骤 1：停止已有进程并清空 plog
 
-**1a. 按端口杀 vLLM 进程及 proxy**：
+**1a. 在容器内停止已记录的 standalone 进程组**：
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "if [ -s {docker.work_dir}/vllm.pid ]; then kill -9 -\$(cat {docker.work_dir}/vllm.pid) 2>/dev/null; fi; rm -f {docker.work_dir}/vllm.pid"
+```
+
+**1b. 在宿主机按端口清理残留进程及 proxy**：
 
 ```bash
 # 杀服务端口（vllm）
@@ -39,7 +45,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "if ! comma
 
 > **说明**：第二条命令只在 `proxy_port` 已配置且与服务端口不同时执行。proxy 和 vllm 共享端口时只执行第一条；`proxy_port` 为空时跳过第二条，不执行带空端口的命令。
 
-**1b. 清空 plog**（防止旧日志干扰本次定位）：
+**1c. 清空 plog**（防止旧日志干扰本次定位）：
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "rm -rf /root/ascend/log/debug/plog/*; echo plog_cleared"
@@ -50,8 +56,10 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "rm 
 ### 步骤 2：启动服务
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "nohup bash {docker.startup_script} > {docker.log_file} 2>&1 &"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "setsid bash {docker.startup_script} > {docker.log_file} 2>&1 & echo \$! > {docker.work_dir}/vllm.pid"
 ```
+
+`setsid` 让启动脚本及其 vLLM 子进程进入独立进程组；PID 文件记录该进程组组长，供停止流程使用。
 
 ### 步骤 3：监控日志等待启动
 
@@ -140,13 +148,24 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.d[
 
 ## 停止服务
 
-**按端口杀**（`fuser -k` 精准不误伤）：
+### 单机模式（standalone）
+
+先在容器内按已记录 PID 杀整个进程组并删除 PID 文件，再由宿主机 `fuser` 清理端口残留：
 
 ```bash
-# 单机模式 — 杀服务端口 + proxy端口（如配置）
+# 1. 容器内停止 vLLM 进程组
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "if [ -s {docker.work_dir}/vllm.pid ]; then kill -9 -\$(cat {docker.work_dir}/vllm.pid) 2>/dev/null; fi; rm -f {docker.work_dir}/vllm.pid"
+
+# 2. 宿主机清理服务端口 + proxy端口（如配置）
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "if ! command -v fuser >/dev/null 2>&1; then echo fuser_not_found_on_host >&2; exit 127; fi; fuser -k {standalone.service_port}/tcp >/dev/null 2>&1 || true; sleep 2; if fuser {standalone.service_port}/tcp >/dev/null 2>&1; then echo service_port_still_busy >&2; exit 1; fi; echo service_port_clean"
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "if ! command -v fuser >/dev/null 2>&1; then echo fuser_not_found_on_host >&2; exit 127; fi; fuser -k {docker.proxy_port}/tcp >/dev/null 2>&1 || true; sleep 1; if fuser {docker.proxy_port}/tcp >/dev/null 2>&1; then echo proxy_port_still_busy >&2; exit 1; fi; echo proxy_port_clean"
+```
 
+### PD分离模式
+
+PD 分离暂时保留原有的宿主机端口清理方式，不套用未经真实环境验证的 PID 规则：
+
+```bash
 # PD分离模式 — 分别停各节点
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.p[0] "if ! command -v fuser >/dev/null 2>&1; then echo fuser_not_found_on_host >&2; exit 127; fi; fuser -k {pd-separated.service_port}/tcp >/dev/null 2>&1 || true; sleep 2; if fuser {pd-separated.service_port}/tcp >/dev/null 2>&1; then echo p_service_port_still_busy >&2; exit 1; fi; echo p_service_port_clean"
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.d[0] "if ! command -v fuser >/dev/null 2>&1; then echo fuser_not_found_on_host >&2; exit 127; fi; fuser -k {pd-separated.service_port}/tcp >/dev/null 2>&1 || true; sleep 2; if fuser {pd-separated.service_port}/tcp >/dev/null 2>&1; then echo d_service_port_still_busy >&2; exit 1; fi; echo d_service_port_clean"

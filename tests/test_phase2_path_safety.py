@@ -352,13 +352,56 @@ class PathPolicyTests(unittest.TestCase):
         self.assertIn("不得在容器内执行 `fuser`", workflow)
         self.assertIn("不要先做额外端口探测", workflow)
         self.assertIn(
-            'docker-exec standalone "nohup bash {docker.startup_script}',
+            'docker-exec standalone "setsid bash {docker.startup_script}',
             workflow,
         )
         self.assertIn(
             "禁止在 Bash 命令前添加 `CLAUDE_PLUGIN_ROOT=...`",
             skill,
         )
+
+    def test_standalone_service_tracks_and_stops_its_process_group(self):
+        service = (ROOT / "modules" / "service.md").read_text(
+            encoding="utf-8"
+        )
+        workflow = (
+            ROOT / "workflows" / "precision-diagnosis.md"
+        ).read_text(encoding="utf-8")
+        auto_fixer = (ROOT / "modules" / "auto-fixer.md").read_text(
+            encoding="utf-8"
+        )
+        skill = (
+            ROOT / "skills" / "diagnose" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+
+        for path, source in (
+            ("modules/service.md", service),
+            ("workflows/precision-diagnosis.md", workflow),
+        ):
+            with self.subTest(path=path):
+                self.assertIn("setsid bash {docker.startup_script}", source)
+                self.assertIn(
+                    r"echo \$! > {docker.work_dir}/vllm.pid",
+                    source,
+                )
+                self.assertNotIn(
+                    'docker-exec standalone "nohup bash {docker.startup_script}',
+                    source,
+                )
+
+        stop_section = service.split("## 停止服务", 1)[1]
+        pid_stop = r"kill -9 -\$(cat {docker.work_dir}/vllm.pid)"
+        self.assertIn(pid_stop, stop_section)
+        self.assertIn(
+            "rm -f {docker.work_dir}/vllm.pid",
+            stop_section,
+        )
+        self.assertLess(
+            stop_section.index(pid_stop),
+            stop_section.index('ssh_utils.py" exec standalone'),
+        )
+        self.assertIn("严格执行 **service.md**", auto_fixer)
+        self.assertIn("进程组", skill)
 
     def test_untrusted_interpreter_is_fail_closed(self):
         with self.assertRaisesRegex(

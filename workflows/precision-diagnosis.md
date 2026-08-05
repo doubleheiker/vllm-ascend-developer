@@ -80,7 +80,7 @@ ls {model.model_path}
 
 ```bash
 # 单机模式
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "nohup bash {docker.startup_script} > {docker.log_file} 2>&1 &"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "setsid bash {docker.startup_script} > {docker.log_file} 2>&1 & echo \$! > {docker.work_dir}/vllm.pid"
 
 # PD分离模式按 service.md 的节点顺序执行 proxy_script 和 startup_script
 ```
@@ -123,7 +123,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.p[
 
 1. 调用 **log-analyzer.md** 分析启动日志中的错误
 2. 调用 **auto-fixer.md** 修复 vllm-ascend 代码
-3. 调用 **service.md** 停止当前服务（`fuser -k {port}/tcp`）
+3. 调用 **service.md** 停止当前服务（standalone 先杀容器内 PID 进程组，再由宿主机清理端口）
 4. **回到 2a** 重新启动并再次验证
 
 > **核心规则**：服务健康检查通过是后续所有步骤（测试、aisbench 评测）的**严格前置条件**。在健康检查通过之前，严禁执行任何推理请求或精度评测。
@@ -242,7 +242,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.p[
 
 | 步骤 | 单机模式（standalone） | PD分离模式（pd-separated） |
 |------|----------------------|---------------------------|
-| 服务启动 | `ssh_utils.py exec standalone` 启动容器 | 分别对 p_nodes / d_nodes 启动 |
+| 服务启动 | `docker-exec standalone` 使用 `setsid` 启动并记录 PID | 分别对 p_nodes / d_nodes 启动 |
 | 日志查看 | `ssh_utils.py exec standalone "tail ..."` | 分别查 P 和 D 节点日志 |
 | 测试执行 | 根据 test.yaml 发 curl 请求 | 同上，端点指向 P 或 D 节点 |
 | 代码修复 | 直接修改或通过 ssh_utils.py upload 上传 | 分别修改对应节点 |
@@ -261,7 +261,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.p[
 
 ```bash
 # 1) 启动服务时指定独立的日志文件（避免覆盖）
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "nohup bash {docker.startup_script} > {docker.work_dir}/service_A.log 2>&1 &"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "setsid bash {docker.startup_script} > {docker.work_dir}/service_A.log 2>&1 & echo \$! > {docker.work_dir}/vllm.pid"
 
 # 2) 等待启动 + 健康检查
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait standalone "{docker.work_dir}/service_A.log" "Application startup complete" --scope container --timeout 900
@@ -275,10 +275,10 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "bas
 ### 2. 配置 B（待测）跑测试
 
 ```bash
-# 1) 按端口杀服务（fuser -k）
+# 1) 严格执行 service.md 的 standalone 停止流程
 # 2) 修改启动脚本 → 配置 B
 # 3) 启动服务，日志写入 service_B.log
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "nohup bash {docker.startup_script} > {docker.work_dir}/service_B.log 2>&1 &"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "setsid bash {docker.startup_script} > {docker.work_dir}/service_B.log 2>&1 & echo \$! > {docker.work_dir}/vllm.pid"
 # 4) 等待启动 + 健康检查 + 执行测试（同上）
 ```
 
