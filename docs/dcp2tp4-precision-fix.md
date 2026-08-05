@@ -79,5 +79,5 @@ lse_flat = lse_flat.flatten(1, -1).to(torch.float64)
 | curl 手动拼命令 prompt 不一致 | 用 `generate_curl.py` 从 test.yaml 生成 |
 | curl 返回 504 | `unset http_proxy; unset https_proxy` |
 | health check 用 localhost 连不上 | 服务 `--host` 绑定了外部 IP，curl 用实际 IP |
-| 杀进程 awk 转义失败 | `fuser -k {port}/tcp` 按端口杀 |
+| 杀进程 awk 转义失败 | 调用 `ssh_utils.py service-stop <node>`，由生命周期脚本处理进程组和宿主机端口 |
 | 两个配置日志互相覆盖 | 启动时分别指定 `service_A.log` / `service_B.log` |

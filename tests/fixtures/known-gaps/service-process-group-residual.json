@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "scenario": "Killing only the service port leaves non-listening vLLM processes alive.",
+  "service_port": 8088,
+  "processes_before_stop": [
+    {
+      "pid": 410,
+      "ppid": 1,
+      "pgid": 410,
+      "state": "S",
+      "name": "bash test.sh",
+      "listens_on_service_port": false
+    },
+    {
+      "pid": 411,
+      "ppid": 410,
+      "pgid": 410,
+      "state": "S",
+      "name": "vllm serve",
+      "listens_on_service_port": true
+    },
+    {
+      "pid": 412,
+      "ppid": 411,
+      "pgid": 410,
+      "state": "S",
+      "name": "VLLM::EngineCore",
+      "listens_on_service_port": false
+    }
+  ],
+  "processes_after_fuser": [
+    {
+      "pid": 412,
+      "ppid": 1,
+      "pgid": 410,
+      "state": "S",
+      "name": "VLLM::EngineCore",
+      "listens_on_service_port": false
+    }
+  ],
+  "expected_stop": {
+    "primary_scope": "container",
+    "target": "pgid:410",
+    "signal_order": [
+      "TERM",
+      "KILL"
+    ],
+    "host_port_action": "verify-or-fallback",
+    "active_processes_remaining": 0
+  }
+}
