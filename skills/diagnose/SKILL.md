@@ -46,7 +46,7 @@ skills/vllm-ascend-developer/
 │   ├── aisbench.yaml               # 精度评测配置
 │   └── proxy.yaml                  # 网络代理配置
 ├── scripts/                        # 工具脚本
-│   ├── ssh_utils.py                # SSH 远程执行与服务生命周期
+│   ├── ssh_utils.py                # SSH 远程执行（exec/docker-exec/wait/upload/download）
 │   ├── generate_curl.py            # 从 config/test.yaml 生成 curl 测试脚本
 │   └── path_policy.py              # 运行目录与 PreToolUse 路径安全策略
 ├── docs/                           # 经验文档（调试方法、定位案例）
@@ -189,7 +189,7 @@ pd-separated:
 2. **区分宿主机与容器命令** — 宿主机命令使用 `ssh_utils.py exec`，默认从节点 `work_dir` 开始；容器命令必须使用 `ssh_utils.py docker-exec`，默认从 `docker.work_dir` 开始，并注入当前节点的 `env_vars`。禁止手工拼接 `docker exec`。绝对路径和命令内显式 `cd` 仍可使用，远程 `{vllm_ascend_source}` 可直接读取和修改；每次调用相互独立，同一容器命令内用 `;` 分隔步骤。
 3. **SSH 远程操作** — 所有远程命令统一通过 `${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py` 执行，首次调用自动建立持久连接（Paramiko daemon），后续命令复用同一连接。响应中的 `node_ref`、`scope`、`cwd` 用于确认实际执行上下文。upload/download 的相对远程路径以节点 `work_dir` 为基准；它们是可选传输能力，不是远程源码修改的前置步骤。
 4. **禁止擅自重装** — vLLM 和 vLLM-Ascend 已在容器内预装，未经用户同意禁止执行 `pip install` 等安装/覆盖操作
-5. **服务按进程组管理** — 启动、状态和停止必须调用 `ssh_utils.py service-start/service-status/service-stop`。停止时先在容器内按已跟踪 PGID 处理 API Server、EngineCore 和 workers，再由脚本在宿主机按配置端口兜底。禁止模型手工拼接 `pkill`、`kill`、`fuser -k` 或进入容器按端口杀进程
+5. **按端口杀进程** — 使用 `fuser -k {service_port}/tcp` 只杀占用服务端口的进程，不会误伤其他端口（如 8081）上的服务。杀完后用 `fuser {service_port}/tcp` 确认端口已释放
 6. **服务就绪后执行 aisbench** — aisbench 精度评测必须在 vLLM 服务完全启动并通过健康检查（`curl http://host:port/v1/models` 返回 200）之后才能执行，严禁在服务未就绪时发起评测
 7. **迭代记录** — 每次修改记录到固定 `{run_dir}/records/fix_N.md`
 8. **启动耗时** — vLLM 服务启动通常需要 10 分钟以上
@@ -210,8 +210,8 @@ pd-separated:
 |------|------|------|
 | curl 返回 504 | 代理未关 | `unset http_proxy; unset https_proxy` 后再 curl |
 | curl 返回 000（连不上） | 服务绑定了 `--host` 外部 IP | curl 用实际 IP 而非 localhost |
-| 停止后 EngineCore 仍存活 | 只杀了监听端口的 API Server | 调用 `ssh_utils.py service-stop <node>`，检查 `container` 和 `ports` 两部分结果 |
-| 启动时端口冲突 | 旧服务或其他服务占用端口 | 先调用 `service-status`；属于当前任务时再调用 `service-stop` |
+| 杀进程失败 | 端口被占但 `fuser -k` 无效 | 用 `kill -9 $(fuser {port}/tcp)` 直接杀 |
+| 启动时端口冲突 | 旧进程未清理 | `fuser {port}/tcp` 查占用，`fuser -k` 杀 |
 | ssh_utils 报 ModuleNotFoundError | paramiko/pyyaml 未安装 | `pip install paramiko pyyaml -i https://pypi.tuna.tsinghua.edu.cn/simple` |
 | pip install 超时 | 默认 PyPI 源慢 | `-i https://pypi.tuna.tsinghua.edu.cn/simple` |
 | 健康检查返回 200 但推理超时 | 模型还在预热 | 等 30-60s 重试 |

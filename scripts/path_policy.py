@@ -424,12 +424,7 @@ def validate_remote_path(path, allowed_roots, operation, base_dir=None):
 
 
 def validate_bash_command(command, project_root=None, cwd=None):
-    """
-    检查常见本地 Bash 写入形式。
-
-    ssh_utils 的引号内远程命令不做通用 Shell 解析，仅阻止绕过
-    service-stop 的手工进程破坏命令。
-    """
+    """检查常见本地 Bash 写入形式；不解析 ssh_utils 的引号内远程命令。"""
     project = get_project_root(project_root)
     base = _resolve_local_path(cwd or project, project)
     if _has_unescaped_shell_substitution(command):
@@ -723,121 +718,6 @@ def _validate_trusted_script_args(script, args, project, cwd):
             _validate_config_dir_arg(args[index + 1], project, cwd)
         elif arg.startswith("--config-dir="):
             _validate_config_dir_arg(arg.split("=", 1)[1], project, cwd)
-
-    if script.name == "ssh_utils.py":
-        _validate_ssh_utils_process_control(args)
-
-
-def _validate_ssh_utils_process_control(args):
-    """拒绝绕过服务生命周期入口的手工远程杀进程。"""
-    action_index = next(
-        (
-            index
-            for index, arg in enumerate(args)
-            if arg in {"exec", "docker-exec"}
-        ),
-        None,
-    )
-    if action_index is None or action_index + 2 >= len(args):
-        return
-    node_ref = str(args[action_index + 1])
-    if node_ref == "eval":
-        return
-
-    remote_command = str(args[action_index + 2])
-    for executable, command_args in _remote_shell_invocations(remote_command):
-        if executable in {"pkill", "killall"}:
-            raise PathPolicyError(
-                "拒绝手工远程 pkill/killall；停止 vLLM 请使用 "
-                "ssh_utils.py service-stop <node>"
-            )
-        if executable == "fuser" and any(
-            arg == "--kill"
-            or (
-                arg.startswith("-")
-                and not arg.startswith("--")
-                and "k" in arg[1:]
-            )
-            for arg in command_args
-        ):
-            raise PathPolicyError(
-                "拒绝手工远程 fuser -k；停止 vLLM 请使用 "
-                "ssh_utils.py service-stop <node>"
-            )
-        if executable != "kill":
-            continue
-        signal_zero = bool(command_args) and (
-            command_args[0] == "-0"
-            or command_args[:2] == ["-s", "0"]
-            or command_args[:2] == ["--signal", "0"]
-            or command_args[0] == "--signal=0"
-        )
-        if signal_zero:
-            continue
-        raise PathPolicyError(
-            "拒绝手工远程 kill；停止 vLLM 请使用 "
-            "ssh_utils.py service-stop <node>"
-        )
-
-
-def _remote_shell_invocations(command):
-    """提取远程 Shell 命令位置，避免把 `grep kill` 的参数当成命令。"""
-    try:
-        lexer = shlex.shlex(
-            command,
-            posix=True,
-            punctuation_chars="|&;<>",
-        )
-        lexer.whitespace_split = True
-        lexer.commenters = ""
-        tokens = list(lexer)
-    except ValueError as exc:
-        raise PathPolicyError(
-            f"ssh_utils 远程命令无法安全解析: {exc}"
-        ) from exc
-
-    for segment in _split_shell_segments(tokens):
-        command_index = _command_index(segment)
-        if command_index is None:
-            continue
-        argv = segment[command_index:]
-        executable, command_args = _unwrap_remote_command(argv)
-        if not executable:
-            continue
-        yield executable, command_args
-        if executable in {"bash", "sh"} and "-c" in command_args:
-            index = command_args.index("-c")
-            if index + 1 < len(command_args):
-                yield from _remote_shell_invocations(command_args[index + 1])
-
-
-def _unwrap_remote_command(argv):
-    """处理 sudo/command/env 等常见无害包装层。"""
-    argv = list(argv)
-    while argv:
-        executable = PurePosixPath(argv[0]).name
-        if executable == "command":
-            argv = argv[1:]
-            while argv and argv[0].startswith("-"):
-                argv = argv[1:]
-            continue
-        if executable == "env":
-            argv = argv[1:]
-            while argv and (
-                argv[0].startswith("-")
-                or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", argv[0])
-            ):
-                argv = argv[1:]
-            continue
-        if executable == "sudo":
-            argv = argv[1:]
-            while argv and argv[0].startswith("-"):
-                option = argv.pop(0)
-                if option in {"-u", "--user", "-g", "--group"} and argv:
-                    argv.pop(0)
-            continue
-        return executable, argv[1:]
-    return "", []
 
 
 def _same_local_path(left, right):

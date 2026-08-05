@@ -112,12 +112,13 @@ class KnownGapContractTests(unittest.TestCase):
         self.assertIn("PYTHONPATH", service_module)
         self.assertTrue((ROOT / "scripts" / "preflight.py").is_file())
 
-    def test_service_group_stop_and_host_port_fallback_are_machine_enforced(self):
-        controller = ROOT / "scripts" / "ssh_utils.py"
+    @unittest.expectedFailure
+    def test_host_only_port_release_is_machine_enforced(self):
+        controller = ROOT / "scripts" / "service_controller.py"
+        self.assertTrue(controller.is_file())
         source = controller.read_text(encoding="utf-8")
-        self.assertIn("build_service_stop_command", source)
         self.assertIn("release_service_port", source)
-        self.assertIn('"container", "host"', source)
+        self.assertIn("remote-host", source)
 
     def test_workspace_write_boundary_is_machine_enforced(self):
         path_policy = ROOT / "scripts" / "path_policy.py"

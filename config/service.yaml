@@ -29,8 +29,6 @@
 #                    - pd-separated: 必配
 #   proxy_port:      proxy 监听端口，配了就按此端口杀 proxy
 #   log_file:        容器内服务日志路径
-#   pid_file:        可选，容器内服务进程组记录文件
-#                    默认为 {log_file}.pgid，通常不需要配置
 #
 # ===== 通用服务字段说明 =====
 #   startup_timeout:   启动超时时间（秒）
@@ -57,7 +55,6 @@ docker:
   proxy_script: ""                                                     # proxy 启动脚本路径（standalone可选，PD分离必配）
   proxy_port: ""                                                       # proxy 监听端口（配置后按此端口杀 proxy）
   log_file: "/home/user/workspace/service.log"                       # 容器内日志路径
-  # pid_file: "/home/user/workspace/service.log.pgid"                # 可选；默认由 log_file 派生
 
 # 单机模式配置（prefill 与 decode 混合调度）
 standalone:

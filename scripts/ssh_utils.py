@@ -6,9 +6,7 @@ vllm-ascend-developer SSH 工具 — 基于 service.yaml 的远程执行模块�
 - 从 config/service.yaml 读取节点连接信息，无需 ~/.ssh/config
 - 持久连接 daemon：首次连接后复用，避免反复 SSH 握手
 - 密码通过 Paramiko 内存传递，不暴露在命令行
-- 支持 exec / docker-exec / upload / download / wait
-- 支持 service-start / service-status / service-stop 服务生命周期
-- 支持 daemon-status / stop-daemon 本地 SSH daemon 管理
+- 支持 exec / docker-exec / upload / download / wait / status / stop
 - docker-exec 从节点配置注入 env_vars，并合并节点级/全局 Docker 配置
 - exec 与 docker-exec 分别从节点 work_dir 与 docker.work_dir 开始执行
 
@@ -16,11 +14,8 @@ vllm-ascend-developer SSH 工具 — 基于 service.yaml 的远程执行模块�
     python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "hostname"
     python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "env"
     python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec pd-separated.p[0] "npu-smi info"
-    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" service-start standalone
-    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" service-status standalone
-    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" service-stop standalone
-    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" daemon-status standalone
-    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" stop-daemon standalone
+    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" status standalone
+    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" stop standalone
 """
 
 import argparse
@@ -149,12 +144,7 @@ def resolve_node(node_ref):
         section = cfg.get("standalone")
         if not section:
             die("配置中没有 standalone 节点")
-        return _extract_node(
-            section,
-            cfg.get("docker"),
-            service_port=section.get("service_port"),
-            deployment_mode="standalone",
-        )
+        return _extract_node(section, cfg.get("docker"))
 
     if node_ref.startswith("pd-separated."):
         rest = node_ref[len("pd-separated."):]
@@ -168,13 +158,7 @@ def resolve_node(node_ref):
             die(f"无效节点引用: {node_ref}")
         if idx >= len(nodes):
             die(f"节点索引超出范围: {node_ref} (共 {len(nodes)} 个)")
-        pd_section = cfg.get("pd-separated", {})
-        return _extract_node(
-            nodes[idx],
-            cfg.get("docker"),
-            service_port=pd_section.get("service_port"),
-            deployment_mode="pd-separated",
-        )
+        return _extract_node(nodes[idx], cfg.get("docker"))
 
     die(f"无效节点引用: {node_ref}")
 
@@ -187,12 +171,7 @@ def _parse_index(s, prefix):
         die(f"无效节点引用格式")
 
 
-def _extract_node(
-    n,
-    docker_defaults=None,
-    service_port=None,
-    deployment_mode=None,
-):
+def _extract_node(n, docker_defaults=None):
     """从 service.yaml 节点配置中提取连接信息，验证必填字段。"""
     docker = _merge_docker_config(docker_defaults, n.get("docker"))
     info = {
@@ -203,8 +182,6 @@ def _extract_node(
         "work_dir": n.get("work_dir", ""),
         "env_vars": _normalize_env_vars(n.get("env_vars")),
         "docker": docker,
-        "service_port": service_port,
-        "deployment_mode": deployment_mode,
     }
     if not info["host"] or info["host"].startswith("<"):
         die(f"节点 host 未配置或为占位符: {info['host']}")
@@ -699,405 +676,6 @@ def docker_exec_command(node_ref, command, timeout=600):
     )
 
 
-# ============================================================================
-# vLLM 服务生命周期
-# ============================================================================
-
-
-def _require_remote_file_path(value, label):
-    """校验服务生命周期使用的容器内绝对文件路径。"""
-    raw = str(value or "").strip()
-    path = PurePosixPath(raw)
-    if (
-        not raw
-        or raw.startswith("<")
-        or any(char in raw for char in "\x00\n\r")
-        or not path.is_absolute()
-        or ".." in path.parts
-        or path == PurePosixPath("/")
-    ):
-        die(f"{label} 必须是远程绝对文件路径，当前值: {raw!r}")
-    return str(path)
-
-
-def _normalize_service_port(value, label, required=True):
-    """校验端口配置；可选端口为空时返回 None。"""
-    if value in (None, ""):
-        if required:
-            die(f"{label} 未配置")
-        return None
-    if isinstance(value, bool):
-        die(f"{label} 必须是 1-65535 的整数")
-    try:
-        port = int(value)
-    except (TypeError, ValueError):
-        die(f"{label} 必须是 1-65535 的整数，当前值: {value!r}")
-    if not 1 <= port <= 65535:
-        die(f"{label} 必须是 1-65535 的整数，当前值: {value!r}")
-    return port
-
-
-def resolve_service_runtime(node):
-    """将节点配置解析为可执行的服务生命周期配置。"""
-    if node.get("deployment_mode") not in {"standalone", "pd-separated"}:
-        die("当前节点不是 vLLM 服务节点")
-
-    docker = node.get("docker") or {}
-    work_dir = _require_remote_work_dir(
-        docker.get("work_dir"),
-        "docker.work_dir",
-    )
-    startup_script = _require_remote_file_path(
-        docker.get("startup_script"),
-        "docker.startup_script",
-    )
-    log_file = _require_remote_file_path(
-        docker.get("log_file"),
-        "docker.log_file",
-    )
-    pid_file = _require_remote_file_path(
-        docker.get("pid_file") or f"{log_file}.pgid",
-        "docker.pid_file",
-    )
-
-    proxy_script_raw = str(docker.get("proxy_script") or "").strip()
-    if node["deployment_mode"] == "pd-separated" and not proxy_script_raw:
-        die("PD 分离模式必须配置 docker.proxy_script")
-    proxy_script = (
-        _require_remote_file_path(proxy_script_raw, "docker.proxy_script")
-        if proxy_script_raw
-        else ""
-    )
-
-    return {
-        "deployment_mode": node["deployment_mode"],
-        "container_name": docker.get("name", ""),
-        "work_dir": work_dir,
-        "startup_script": startup_script,
-        "proxy_script": proxy_script,
-        "log_file": log_file,
-        "pid_file": pid_file,
-        "service_port": _normalize_service_port(
-            node.get("service_port"),
-            "service_port",
-        ),
-        "proxy_port": _normalize_service_port(
-            docker.get("proxy_port"),
-            "docker.proxy_port",
-            required=False,
-        ),
-    }
-
-
-def _service_process_probe():
-    """返回不会匹配自身 grep 的 vLLM 活进程检查命令。"""
-    return (
-        "ps -eo stat=,args= | "
-        "grep -E '[V]LLM::|[v]llm[[:space:]]+serve' | "
-        "grep -Ev '^[[:space:]]*Z'"
-    )
-
-
-def _service_group_owned_probe(runtime):
-    """确认 pid file 指向的活进程组仍属于当前服务。"""
-    startup = shlex.quote(runtime["startup_script"])
-    proxy = shlex.quote(runtime["proxy_script"])
-    return (
-        "ps -eo pgid=,stat=,args= | "
-        f"awk -v g=\"$pgid\" -v startup={startup} -v proxy={proxy} "
-        "'$1 == g && $2 !~ /^Z/ { "
-        "line=$0; if (index(line, startup) || "
-        "(proxy != \"\" && index(line, proxy)) || "
-        "line ~ /VLLM::|vllm[[:space:]]+serve/) found=1 "
-        "} END { exit !found }'"
-    )
-
-
-def build_service_start_command(node):
-    """构造容器内服务启动命令，由独立 session/PGID 管理整棵进程。"""
-    runtime = resolve_service_runtime(node)
-    pid_file = shlex.quote(runtime["pid_file"])
-    log_file = shlex.quote(runtime["log_file"])
-    startup_script = shlex.quote(runtime["startup_script"])
-    proxy_script = shlex.quote(runtime["proxy_script"])
-    probe = _service_process_probe()
-    group_owned = _service_group_owned_probe(runtime)
-
-    # 位置参数避免在多层 shell 中重复拼接用户配置路径。
-    inner = (
-        'printf "%s\\n" "$$" > "$1" || exit 70; '
-        'if [ -n "$2" ]; then bash "$2" & fi; '
-        'exec bash "$3"'
-    )
-    return (
-        "command -v setsid >/dev/null 2>&1 || "
-        "{ echo 'SERVICE_START=missing-setsid' >&2; exit 127; }; "
-        f"test -f {startup_script} || "
-        "{ echo 'SERVICE_START=missing-startup-script' >&2; exit 2; }; "
-        f"if [ -n {proxy_script} ]; then test -f {proxy_script} || "
-        "{ echo 'SERVICE_START=missing-proxy-script' >&2; exit 2; }; fi; "
-        f"if [ -f {pid_file} ]; then "
-        f"pgid=$(sed -n '1p' {pid_file}); "
-        "if printf '%s' \"$pgid\" | grep -Eq '^[0-9]+$' && "
-        "[ \"$pgid\" -gt 1 ] && "
-        "ps -eo pgid=,stat= | awk -v g=\"$pgid\" "
-        "'$1 == g && $2 !~ /^Z/ { found=1 } END { exit !found }' && "
-        f"{group_owned}; then "
-        "echo \"SERVICE_START=already-running PGID=$pgid\" >&2; exit 3; "
-        f"else rm -f -- {pid_file}; fi; fi; "
-        f"if {probe} >/dev/null 2>&1; then "
-        "echo 'SERVICE_START=untracked-vllm-process' >&2; exit 4; fi; "
-        f": > {log_file} || "
-        "{ echo 'SERVICE_START=log-not-writable' >&2; exit 2; }; "
-        f"setsid bash -c {shlex.quote(inner)} service-wrapper "
-        f"{pid_file} {proxy_script} {startup_script} "
-        f">> {log_file} 2>&1 < /dev/null & "
-        "launcher_pid=$!; pgid=''; "
-        "i=0; while [ \"$i\" -lt 50 ]; do "
-        f"if [ -s {pid_file} ]; then pgid=$(sed -n '1p' {pid_file}); break; fi; "
-        "kill -0 \"$launcher_pid\" 2>/dev/null || break; "
-        "sleep 0.1; i=$((i + 1)); done; "
-        "if ! printf '%s' \"$pgid\" | grep -Eq '^[0-9]+$' || "
-        "[ \"$pgid\" -le 1 ]; then "
-        "echo 'SERVICE_START=pidfile-not-created' >&2; exit 5; fi; "
-        "if ! kill -0 \"-$pgid\" 2>/dev/null; then "
-        "echo \"SERVICE_START=exited-early PGID=$pgid\" >&2; exit 6; fi; "
-        "echo \"SERVICE_STARTED_PGID=$pgid\""
-    )
-
-
-def build_service_stop_command(node, grace_period=30):
-    """构造容器内服务停止命令：TERM -> 有界等待 -> KILL。"""
-    runtime = resolve_service_runtime(node)
-    if isinstance(grace_period, bool):
-        die("grace_period 必须是非负整数")
-    try:
-        grace_period = int(grace_period)
-    except (TypeError, ValueError):
-        die("grace_period 必须是非负整数")
-    if not 0 <= grace_period <= 300:
-        die("grace_period 必须在 0-300 秒之间")
-
-    pid_file = shlex.quote(runtime["pid_file"])
-    probe = _service_process_probe()
-    group_owned = _service_group_owned_probe(runtime)
-    group_active = (
-        "ps -eo pgid=,stat= | awk -v g=\"$pgid\" "
-        "'$1 == g && $2 !~ /^Z/ { found=1 } END { exit !found }'"
-    )
-    return (
-        "group_active() { " + group_active + "; }; "
-        f"if [ ! -f {pid_file} ]; then "
-        f"if {probe} >/dev/null 2>&1; then "
-        "echo 'SERVICE_STOP=untracked' >&2; exit 4; "
-        "else echo 'SERVICE_STOP=already-stopped'; exit 0; fi; fi; "
-        f"pgid=$(sed -n '1p' {pid_file}); "
-        "if ! printf '%s' \"$pgid\" | grep -Eq '^[0-9]+$' || "
-        "[ \"$pgid\" -le 1 ]; then "
-        "echo 'SERVICE_STOP=invalid-pgid' >&2; exit 2; fi; "
-        f"if group_active && ! {group_owned}; then "
-        "echo 'SERVICE_STOP=ownership-mismatch' >&2; exit 6; fi; "
-        "if group_active; then "
-        'kill -TERM -- "-$pgid" 2>/dev/null || true; '
-        f"remaining={grace_period}; while group_active && "
-        "[ \"$remaining\" -gt 0 ]; do "
-        "sleep 1; remaining=$((remaining - 1)); done; "
-        "if group_active; then "
-        'kill -KILL -- "-$pgid" 2>/dev/null || true; '
-        "sleep 1; fi; fi; "
-        "if group_active; then "
-        "echo \"SERVICE_STOP=residual PGID=$pgid\" >&2; "
-        "ps -eo pid=,ppid=,pgid=,sid=,stat=,args= | "
-        "awk -v g=\"$pgid\" '$3 == g && $5 !~ /^Z/'; exit 5; fi; "
-        "zombie_count=$(ps -eo pgid=,stat= | awk -v g=\"$pgid\" "
-        "'$1 == g && $2 ~ /^Z/ { count++ } END { print count+0 }'); "
-        "if [ \"$zombie_count\" -gt 0 ]; then "
-        "echo \"SERVICE_ZOMBIES=$zombie_count PGID=$pgid\"; fi; "
-        f"rm -f -- {pid_file}; "
-        f"if {probe} >/dev/null 2>&1; then "
-        "echo 'SERVICE_STOP=untracked' >&2; exit 4; fi; "
-        "echo \"SERVICE_STOP=clean PGID=$pgid\""
-    )
-
-
-def build_service_status_command(node):
-    """构造只读服务状态命令，区分跟踪、残留与已停止。"""
-    runtime = resolve_service_runtime(node)
-    pid_file = shlex.quote(runtime["pid_file"])
-    probe = _service_process_probe()
-    group_owned = _service_group_owned_probe(runtime)
-    return (
-        f"if [ -f {pid_file} ]; then pgid=$(sed -n '1p' {pid_file}); "
-        "if printf '%s' \"$pgid\" | grep -Eq '^[0-9]+$' && "
-        "[ \"$pgid\" -gt 1 ] && "
-        "ps -eo pgid=,stat= | awk -v g=\"$pgid\" "
-        "'$1 == g && $2 !~ /^Z/ { found=1 } END { exit !found }' && "
-        f"{group_owned}; then "
-        "echo \"SERVICE_STATUS=running PGID=$pgid\"; "
-        "else echo \"SERVICE_STATUS=stale-pidfile PGID=$pgid\"; fi; "
-        f"elif {probe} >/dev/null 2>&1; then "
-        "echo 'SERVICE_STATUS=untracked'; "
-        "else echo 'SERVICE_STATUS=stopped'; fi"
-    )
-
-
-def _service_ports(runtime):
-    """返回去重后的服务/代理端口与标签。"""
-    ports = [("SERVICE", runtime["service_port"])]
-    if (
-        runtime.get("proxy_port") is not None
-        and runtime["proxy_port"] != runtime["service_port"]
-    ):
-        ports.append(("PROXY", runtime["proxy_port"]))
-    return ports
-
-
-def _build_service_port_command(runtime, release=False):
-    """构造宿主机端口检查；停服务时才允许 fuser 作为兜底。"""
-    parts = [
-        "command -v fuser >/dev/null 2>&1 || "
-        "{ echo 'SERVICE_PORT_CHECK=missing-fuser' >&2; exit 127; }"
-    ]
-    for label, port in _service_ports(runtime):
-        marker = f"{label}_PORT_{port}"
-        if release:
-            parts.append(
-                f"if fuser -s {port}/tcp; then "
-                f"fuser -k {port}/tcp >/dev/null 2>&1 || true; sleep 1; fi"
-            )
-        parts.append(
-            f"if fuser -s {port}/tcp; then echo '{marker}=busy'; "
-            f"else echo '{marker}=clean'; fi"
-        )
-    return "; ".join(parts)
-
-
-def _ports_are_clean(response):
-    return bool(response.get("success")) and not re.search(
-        r"(?:SERVICE|PROXY)_PORT_[0-9]+=busy",
-        response.get("stdout", ""),
-    )
-
-
-def inspect_service_ports(node_ref, node=None):
-    """在宿主机检查服务端口，不修改进程。"""
-    node = node or resolve_node(node_ref)
-    runtime = resolve_service_runtime(node)
-    return host_exec_command(
-        node_ref,
-        _build_service_port_command(runtime, release=False),
-        timeout=60,
-    )
-
-
-def release_service_port(node_ref, node=None):
-    """进程组停止后，在宿主机释放并复查端口。"""
-    node = node or resolve_node(node_ref)
-    runtime = resolve_service_runtime(node)
-    return host_exec_command(
-        node_ref,
-        _build_service_port_command(runtime, release=True),
-        timeout=90,
-    )
-
-
-def start_service(node_ref):
-    """先检查宿主机端口，再在容器内启动可跟踪的进程组。"""
-    node = resolve_node(node_ref)
-    runtime = resolve_service_runtime(node)
-    port_result = inspect_service_ports(node_ref, node=node)
-    result = {
-        "action": "service-start",
-        "node_ref": node_ref,
-        "execution_scopes": ["host"],
-        "pid_file": runtime["pid_file"],
-        "ports": port_result,
-    }
-    if not _ports_are_clean(port_result):
-        result.update(
-            {
-                "success": False,
-                "stderr": "服务端口未通过启动前检查，未执行容器启动",
-            }
-        )
-        return result
-
-    container_result = docker_exec_command(
-        node_ref,
-        build_service_start_command(node),
-        timeout=120,
-    )
-    result.update(
-        {
-            "success": bool(container_result.get("success")),
-            "execution_scopes": ["host", "container"],
-            "container": container_result,
-        }
-    )
-    return result
-
-
-def service_status(node_ref):
-    """同时读取容器进程组与宿主机端口状态。"""
-    node = resolve_node(node_ref)
-    runtime = resolve_service_runtime(node)
-    container_result = docker_exec_command(
-        node_ref,
-        build_service_status_command(node),
-        timeout=60,
-    )
-    port_result = inspect_service_ports(node_ref, node=node)
-    return {
-        "success": bool(
-            container_result.get("success") and port_result.get("success")
-        ),
-        "action": "service-status",
-        "node_ref": node_ref,
-        "execution_scopes": ["container", "host"],
-        "pid_file": runtime["pid_file"],
-        "container": container_result,
-        "ports": port_result,
-    }
-
-
-def stop_service(node_ref, grace_period=30):
-    """先在容器内停止跟踪的进程组，再从宿主机按端口兜底并复查。"""
-    node = resolve_node(node_ref)
-    runtime = resolve_service_runtime(node)
-    container_result = docker_exec_command(
-        node_ref,
-        build_service_stop_command(node, grace_period=grace_period),
-        timeout=int(grace_period) + 120,
-    )
-    container_output = (
-        container_result.get("stdout", "")
-        + "\n"
-        + container_result.get("stderr", "")
-    )
-    container_clean = bool(container_result.get("success")) and not re.search(
-        r"SERVICE_STOP=(?:untracked|invalid-pgid|ownership-mismatch|residual)",
-        container_output,
-    )
-    # 只有容器内跟踪进程组已干净时，才允许宿主机端口杀进程兜底。
-    # untracked 或 residual 时改为只读检查，避免隐藏归属不明的服务。
-    if container_clean:
-        port_result = release_service_port(node_ref, node=node)
-        host_action = "release-and-verify"
-    else:
-        port_result = inspect_service_ports(node_ref, node=node)
-        host_action = "inspect-only"
-    return {
-        "success": bool(container_clean and _ports_are_clean(port_result)),
-        "action": "service-stop",
-        "node_ref": node_ref,
-        "execution_scopes": ["container", "host"],
-        "pid_file": runtime["pid_file"],
-        "container": container_result,
-        "ports": port_result,
-        "host_action": host_action,
-    }
-
-
 def upload_file(node_ref, local_path, remote_path):
     """上传文件到远程节点。"""
     node = resolve_node(node_ref)
@@ -1284,39 +862,12 @@ def main():
         help="超时秒数，默认 600（10分钟）",
     )
 
-    # vLLM service lifecycle
-    p_service_start = sub.add_parser(
-        "service-start",
-        help="检查宿主机端口后，在容器内启动并记录服务进程组",
-    )
-    p_service_start.add_argument("node_ref")
-
-    p_service_status = sub.add_parser(
-        "service-status",
-        help="查看容器服务进程组和宿主机端口状态",
-    )
-    p_service_status.add_argument("node_ref")
-
-    p_service_stop = sub.add_parser(
-        "service-stop",
-        help="停止容器服务进程组，再从宿主机释放并复查端口",
-    )
-    p_service_stop.add_argument("node_ref")
-    p_service_stop.add_argument(
-        "--grace-period",
-        type=int,
-        default=30,
-        help="TERM 后等待秒数，默认 30，最大 300",
-    )
-
-    # SSH daemon lifecycle. status/stop 保留一个兼容周期。
-    p_daemon_status = sub.add_parser("daemon-status", help="查看 SSH daemon 状态")
-    p_daemon_status.add_argument("node_ref")
-    p_stop_daemon = sub.add_parser("stop-daemon", help="停止 SSH daemon")
-    p_stop_daemon.add_argument("node_ref")
-    p_status = sub.add_parser("status", help="daemon-status 的兼容别名")
+    # status
+    p_status = sub.add_parser("status", help="查看 daemon 状态")
     p_status.add_argument("node_ref")
-    p_stop = sub.add_parser("stop", help="stop-daemon 的兼容别名")
+
+    # stop
+    p_stop = sub.add_parser("stop", help="停止 daemon")
     p_stop.add_argument("node_ref")
 
     # upload
@@ -1379,20 +930,9 @@ def main():
                     args.timeout,
                 )
             )
-        elif args.action == "service-start":
-            print_json(start_service(args.node_ref))
-        elif args.action == "service-status":
-            print_json(service_status(args.node_ref))
-        elif args.action == "service-stop":
-            print_json(
-                stop_service(
-                    args.node_ref,
-                    grace_period=args.grace_period,
-                )
-            )
-        elif args.action in {"daemon-status", "status"}:
+        elif args.action == "status":
             daemon_status(args.node_ref)
-        elif args.action in {"stop-daemon", "stop"}:
+        elif args.action == "stop":
             stop_daemon(args.node_ref)
         elif args.action == "upload":
             print_json(upload_file(args.node_ref, args.local_path, args.remote_path))
