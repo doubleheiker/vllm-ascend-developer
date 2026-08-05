@@ -312,6 +312,54 @@ class PathPolicyTests(unittest.TestCase):
                         self.project,
                     )
 
+    def test_plugin_root_assignment_denial_gives_resolved_retry_path(self):
+        plugin_root = path_policy.PLUGIN_ROOT.as_posix()
+        command = (
+            f'CLAUDE_PLUGIN_ROOT="{plugin_root}" '
+            'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" '
+            'exec standalone "true"'
+        )
+        with self.assertRaisesRegex(
+            path_policy.PathPolicyError,
+            "直接使用 Skill 中已解析的 Plugin 脚本绝对路径",
+        ) as denied:
+            path_policy.validate_bash_command(command, self.project)
+        self.assertIn(
+            str(path_policy.PLUGIN_ROOT / "scripts"),
+            str(denied.exception),
+        )
+
+    def test_service_commands_keep_fuser_on_host_and_fail_closed(self):
+        service = (ROOT / "modules" / "service.md").read_text(
+            encoding="utf-8"
+        )
+        workflow = (
+            ROOT / "workflows" / "precision-diagnosis.md"
+        ).read_text(encoding="utf-8")
+        skill = (
+            ROOT / "skills" / "diagnose" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+
+        for line in service.splitlines():
+            if "fuser" not in line or "ssh_utils.py" not in line:
+                continue
+            with self.subTest(line=line):
+                self.assertIn(" exec ", line)
+                self.assertNotIn(" docker-exec ", line)
+                self.assertIn("command -v fuser", line)
+                self.assertNotRegex(line, r"fuser [^;]+\|\| echo")
+
+        self.assertIn("不得在容器内执行 `fuser`", workflow)
+        self.assertIn("不要先做额外端口探测", workflow)
+        self.assertIn(
+            'docker-exec standalone "nohup bash {docker.startup_script}',
+            workflow,
+        )
+        self.assertIn(
+            "禁止在 Bash 命令前添加 `CLAUDE_PLUGIN_ROOT=...`",
+            skill,
+        )
+
     def test_untrusted_interpreter_is_fail_closed(self):
         with self.assertRaisesRegex(
             path_policy.PathPolicyError,

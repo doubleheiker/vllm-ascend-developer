@@ -21,6 +21,8 @@ hooks:
 
 Plugin 安装目录 `${CLAUDE_PLUGIN_ROOT}` 只读。所有本地配置和运行结果只能写入用户项目 `${CLAUDE_PROJECT_DIR}/.dev/`。
 
+Claude Code 加载 Skill 时会把 Plugin 路径占位符解析成当前版本的绝对路径。直接执行已解析的脚本绝对路径；禁止在 Bash 命令前添加 `CLAUDE_PLUGIN_ROOT=...` 或 `CLAUDE_PROJECT_DIR=...` 赋值。若 Hook 因变量赋值而拒绝命令，按拒绝信息删除赋值前缀并使用其中给出的绝对路径，只重试一次；仍失败则停止并报告，不要重复同一命令、读取 `ssh_utils.py` 猜测原因或改用其他工具绕过。
+
 进入一个新的诊断工作流时，最多执行一次 `bootstrap`。它以当前 workspace 的文件系统为准，检查并补齐缺失配置与目录，同时始终复用项目唯一的 `${CLAUDE_PROJECT_DIR}/.dev/run/`；不要按会话创建目录：
 
 ```bash

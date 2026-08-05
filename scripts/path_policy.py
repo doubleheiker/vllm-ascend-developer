@@ -562,8 +562,11 @@ def _validate_shell_segment(tokens, project, cwd):
     for token in tokens[:command_index]:
         match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)=.*", token)
         if match and match.group(1) in PROTECTED_ENV_VARS:
+            name = match.group(1)
             raise PathPolicyError(
-                f"拒绝在 Bash 命令中覆盖受保护变量 {match.group(1)}"
+                f"拒绝在 Bash 命令中覆盖受保护变量 {name}；"
+                "请删除变量赋值前缀，直接使用 Skill 中已解析的 Plugin "
+                f"脚本绝对路径 {PLUGIN_ROOT / 'scripts'}"
             )
 
     executable = Path(tokens[command_index]).name.lower()

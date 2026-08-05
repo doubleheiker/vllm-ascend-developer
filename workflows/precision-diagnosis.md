@@ -16,6 +16,8 @@
 
 所有远程操作通过 `scripts/ssh_utils.py` 执行。宿主机 `exec` 默认从节点 `work_dir` 开始，容器 `docker-exec` 默认从 `docker.work_dir` 开始；绝对路径和显式 `cd` 仍可使用。首次调用自动建立持久连接（daemon），后续命令复用同一连接。
 
+Claude Code 加载本 workflow 时会把 Plugin 路径占位符解析成绝对路径。直接执行已解析路径，禁止在 Bash 命令前声明 `CLAUDE_PLUGIN_ROOT`。以下远程命令模板替换配置占位符后直接执行，不自行增加工具探测或改写执行域。
+
 ```bash
 # 单机模式
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" exec standalone "<command>"
@@ -67,14 +69,23 @@ ls {model.model_path}
 
 ### 第 2 步：启动服务（含启动失败子循环）
 
-调用 **service.md** 模块，根据 `service.yaml` 中的 `mode` 选择单机或 PD分离模式启动服务。
+读取 **service.md**，根据 `service.yaml` 中的 `mode` 严格逐条执行对应模式的步骤 1 和步骤 2。不得自行设计端口预检查，不得在容器内执行 `fuser`，也不得临时改用 `ss`、`netstat`、`lsof` 或扫描 `/proc`；`service.md` 中的 `fuser` 命令只能通过宿主机 `exec` 执行，命令非零时停止并报告原始结果。
 
 - 单机模式（standalone）：prefill 与 decode 混合调度，在一台机器上启动
 - PD分离模式（pd-separated）：P 节点（prefill）和 D 节点（decode）分别启动，通过 proxy 协调
 
 #### 2a. 启动并监控
 
-启动后使用 `wait` 轮询日志等待完成（约 10 分钟以上）：
+执行完 **service.md** 的清理命令后，必须直接执行对应的启动命令，不要先做额外端口探测：
+
+```bash
+# 单机模式
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "nohup bash {docker.startup_script} > {docker.log_file} 2>&1 &"
+
+# PD分离模式按 service.md 的节点顺序执行 proxy_script 和 startup_script
+```
+
+然后使用 `wait` 轮询日志等待完成（约 10 分钟以上）：
 
 ```bash
 # 单机模式
