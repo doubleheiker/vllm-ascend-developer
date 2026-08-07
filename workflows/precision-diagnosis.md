@@ -52,24 +52,26 @@ aisbench 精度评测必须在 vLLM 服务**完全启动并通过健康检查**�
 
 ## 工作流
 
-### 第 1 步：初始化
+### 第 1 步：初始化与容器 Python preflight
 
-读取所有配置文件，确认配置正确。
+读取所有配置文件，确认必填配置不再是占位符。不要在 Claude 本地执行 `pip show` 或 `ls {model.model_path}` 来推断远程容器状态。
+
+读取 **service.md** 的“步骤 0”，对本次使用的节点逐个直接执行 `scripts/preflight.py`。单机模式只检查 `standalone`；PD 分离模式检查实际配置中的每个 P/D 节点：
 
 ```bash
-# 检查 vllm-ascend 安装
-pip show {model.pip_package}
+# 单机模式
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/preflight.py" --project-root "${CLAUDE_PROJECT_DIR}" standalone
 
-# 确认源码位置
-pip show {model.pip_package} | grep Location
-
-# 确认模型文件存在
-ls {model.model_path}
+# PD 分离模式示例
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/preflight.py" --project-root "${CLAUDE_PROJECT_DIR}" pd-separated.p[0]
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/preflight.py" --project-root "${CLAUDE_PROJECT_DIR}" pd-separated.d[0]
 ```
+
+外层执行失败或 `preflight.import_ready: false` 时停止启动并报告；不得自动安装依赖，也不要改写或重复执行检查命令。`source_match` 和预期源码目录存在性在本轮作为路径证据记录，不自动修改 `PYTHONPATH`。
 
 ### 第 2 步：启动服务（含启动失败子循环）
 
-读取 **service.md**，根据 `service.yaml` 中的 `mode` 严格逐条执行对应模式的步骤 1 和步骤 2。不得自行设计端口预检查，不得在容器内执行 `fuser`，也不得临时改用 `ss`、`netstat`、`lsof` 或扫描 `/proc`；`service.md` 中的 `fuser` 命令只能通过宿主机 `exec` 执行，命令非零时停止并报告原始结果。
+复用第 1 步已通过的 preflight 结果，读取 **service.md**，根据 `service.yaml` 中的 `mode` 严格逐条执行对应模式的步骤 1 和步骤 2。不得自行设计端口预检查，不得在容器内执行 `fuser`，也不得临时改用 `ss`、`netstat`、`lsof` 或扫描 `/proc`；`service.md` 中的 `fuser` 命令只能通过宿主机 `exec` 执行，命令非零时停止并报告原始结果。
 
 - 单机模式（standalone）：prefill 与 decode 混合调度，在一台机器上启动
 - PD分离模式（pd-separated）：P 节点（prefill）和 D 节点（decode）分别启动，通过 proxy 协调

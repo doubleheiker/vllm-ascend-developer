@@ -49,6 +49,7 @@ skills/vllm-ascend-developer/
 │   └── proxy.yaml                  # 网络代理配置
 ├── scripts/                        # 工具脚本
 │   ├── ssh_utils.py                # SSH 远程执行（exec/docker-exec/wait/upload/download）
+│   ├── preflight.py                # 容器 Python、导入状态与实际包来源的只读检查
 │   ├── generate_curl.py            # 从 config/test.yaml 生成 curl 测试脚本
 │   └── path_policy.py              # 运行目录与 PreToolUse 路径安全策略
 ├── docs/                           # 经验文档（调试方法、定位案例）
@@ -100,7 +101,7 @@ Plugin 中的 `${CLAUDE_PLUGIN_ROOT}/config/*.yaml` 是只读模板。`bootstrap
 
 读取 `${CLAUDE_PLUGIN_ROOT}/workflows/precision-diagnosis.md`，按照其中步骤执行：
 
-1. 初始化配置检查
+1. 初始化配置并执行容器 Python/import preflight
 2. 启动服务 → 确保服务就绪
 3. 执行测试 → 发送推理请求
 4. 验证结果 → 对比预期输出

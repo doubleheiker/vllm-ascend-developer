@@ -30,7 +30,12 @@ CONFIG_FILE_NAMES = (
     "aisbench.yaml",
     "proxy.yaml",
 )
-TRUSTED_SCRIPTS = {"path_policy.py", "generate_curl.py", "ssh_utils.py"}
+TRUSTED_SCRIPTS = {
+    "path_policy.py",
+    "generate_curl.py",
+    "preflight.py",
+    "ssh_utils.py",
+}
 INTERPRETERS = {
     "bash",
     "node",

@@ -19,6 +19,26 @@
 - 目标服务器已安装 Docker
 - 如需下载依赖或 clone 代码，配置 `config/proxy.yaml`
 
+## 步骤 0：容器 Python 导入检查
+
+每个新诊断工作流在启动服务前，对本次使用的每个节点执行一次只读检查。该脚本复用 `ssh_utils.py` 的 `docker-exec`，不会安装包、修改源码或写入远程文件：
+
+```bash
+# 单机模式
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/preflight.py" --project-root "${CLAUDE_PROJECT_DIR}" standalone
+
+# PD 分离模式：按实际配置对每个 P/D 节点分别执行
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/preflight.py" --project-root "${CLAUDE_PROJECT_DIR}" pd-separated.p[0]
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/preflight.py" --project-root "${CLAUDE_PROJECT_DIR}" pd-separated.d[0]
+```
+
+结果处理规则：
+
+- 外层 `success: false` 或缺少 `preflight`：停止并报告原始结果，不重试、不读取工具源码猜测原因。
+- `preflight.import_ready: false`：停止启动，直接报告 `imports` 中的导入错误；禁止自动执行 `pip install`。
+- `source_match: false` 或预期源码目录 `exists: false`：记录实际 `__file__`、`PYTHONPATH` 和 `sys.path` 作为路径偏差证据。本轮只报告，不自动修改启动环境。
+- 已在当前工作流成功检查过的节点直接复用结果，不要在同一轮启动/重启时重复检查。
+
 ---
 
 ## 单机模式流程（standalone）
