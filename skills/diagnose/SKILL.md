@@ -131,6 +131,7 @@ standalone:
     ASCEND_RT_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
   docker:
     name: "vllm-ascend-dev"
+    container_python: "python3"
     startup_script: "/path/to/start_server.sh"
     ...
 ```
@@ -189,7 +190,7 @@ pd-separated:
 ## 注意事项
 
 1. **只修改 vllm-ascend 代码** — 禁止修改 vLLM 源码
-2. **区分宿主机与容器命令** — 宿主机命令使用 `ssh_utils.py exec`，默认从节点 `work_dir` 开始；容器命令必须使用 `ssh_utils.py docker-exec`，默认从 `docker.work_dir` 开始，并注入当前节点的 `env_vars`。禁止手工拼接 `docker exec`。绝对路径和命令内显式 `cd` 仍可使用，远程 `{vllm_ascend_source}` 可直接读取和修改；每次调用相互独立，同一容器命令内用 `;` 分隔步骤。
+2. **区分宿主机与容器命令** — 宿主机命令使用 `ssh_utils.py exec`，默认从节点 `work_dir` 开始；容器命令必须使用 `ssh_utils.py docker-exec`，默认从 `docker.work_dir` 开始，并注入当前节点的 `env_vars`。启动 vLLM 时额外使用 `--source-pythonpath`，由工具注入源码路径；启动脚本内显式设置的同名变量仍然优先。禁止手工拼接 `docker exec`。绝对路径和命令内显式 `cd` 仍可使用，远程 `{vllm_ascend_source}` 可直接读取和修改；每次调用相互独立，同一容器命令内用 `;` 分隔步骤。
 3. **SSH 远程操作** — 所有远程命令统一通过 `${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py` 执行，首次调用自动建立持久连接（Paramiko daemon），后续命令复用同一连接。响应中的 `node_ref`、`scope`、`cwd` 用于确认实际执行上下文。upload/download 的相对远程路径以节点 `work_dir` 为基准；它们是可选传输能力，不是远程源码修改的前置步骤。
 4. **禁止擅自重装** — vLLM 和 vLLM-Ascend 已在容器内预装，未经用户同意禁止执行 `pip install` 等安装/覆盖操作
 5. **standalone 按进程组停止** — 使用 `setsid` 启动并将组长 PID 写入 `{docker.work_dir}/vllm.pid`；停止时先在容器内用负 PID 杀整个进程组并删除 PID 文件，再在宿主机用 `fuser` 清理和验证服务端口。禁止在容器内运行 `fuser`，禁止按进程名扩大清理范围。PD 分离暂时保留原端口流程

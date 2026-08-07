@@ -67,7 +67,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/preflight.py" --project-root "${CLAUDE_PR
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/preflight.py" --project-root "${CLAUDE_PROJECT_DIR}" pd-separated.d[0]
 ```
 
-外层执行失败或 `preflight.import_ready: false` 时停止启动并报告；不得自动安装依赖，也不要改写或重复执行检查命令。`source_match` 和预期源码目录存在性在本轮作为路径证据记录，不自动修改 `PYTHONPATH`。
+preflight 会使用与服务启动相同的源码 `PYTHONPATH` 注入。外层执行失败、`preflight.import_ready: false`、任一 `source_match: false` 或预期源码目录不存在时，停止启动并报告；不得自动安装依赖，也不要改写或重复执行检查命令。
 
 ### 第 2 步：启动服务（含启动失败子循环）
 
@@ -82,7 +82,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/preflight.py" --project-root "${CLAUDE_PR
 
 ```bash
 # 单机模式
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "setsid bash {docker.startup_script} > {docker.log_file} 2>&1 & echo \$! > {docker.work_dir}/vllm.pid"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone --source-pythonpath "setsid bash {docker.startup_script} > {docker.log_file} 2>&1 & echo \$! > {docker.work_dir}/vllm.pid"
 
 # PD分离模式按 service.md 的节点顺序执行 proxy_script 和 startup_script
 ```
@@ -263,7 +263,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.p[
 
 ```bash
 # 1) 启动服务时指定独立的日志文件（避免覆盖）
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "setsid bash {docker.startup_script} > {docker.work_dir}/service_A.log 2>&1 & echo \$! > {docker.work_dir}/vllm.pid"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone --source-pythonpath "setsid bash {docker.startup_script} > {docker.work_dir}/service_A.log 2>&1 & echo \$! > {docker.work_dir}/vllm.pid"
 
 # 2) 等待启动 + 健康检查
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" wait standalone "{docker.work_dir}/service_A.log" "Application startup complete" --scope container --timeout 900
@@ -280,7 +280,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "bas
 # 1) 严格执行 service.md 的 standalone 停止流程
 # 2) 修改启动脚本 → 配置 B
 # 3) 启动服务，日志写入 service_B.log
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "setsid bash {docker.startup_script} > {docker.work_dir}/service_B.log 2>&1 & echo \$! > {docker.work_dir}/vllm.pid"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone --source-pythonpath "setsid bash {docker.startup_script} > {docker.work_dir}/service_B.log 2>&1 & echo \$! > {docker.work_dir}/vllm.pid"
 # 4) 等待启动 + 健康检查 + 执行测试（同上）
 ```
 

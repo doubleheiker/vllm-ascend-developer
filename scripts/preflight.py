@@ -111,7 +111,12 @@ def run_preflight(node_ref, timeout=120):
         or model.get("vllm_ascend_source"),
     )
     response = dict(
-        ssh_utils.docker_exec_command(node_ref, command, timeout=timeout)
+        ssh_utils.docker_exec_command(
+            node_ref,
+            command,
+            timeout=timeout,
+            source_pythonpath=True,
+        )
     )
     response["preflight"] = None
     if not response.get("success"):

@@ -34,6 +34,41 @@ ssh_utils = _load_ssh_utils()
 
 
 class ServiceEnvironmentTests(unittest.TestCase):
+    def test_source_pythonpath_is_prepended_before_startup_script(self):
+        command = ssh_utils.build_source_pythonpath_command(
+            "setsid bash /scripts/test.sh",
+            {
+                "vllm_source": "/host/vllm",
+                "vllm_ascend_source": "/host/vllm-ascend",
+                "container_vllm_source": "/container/vllm source",
+                "container_vllm_ascend_source": "/container/vllm-ascend",
+            },
+        )
+
+        self.assertEqual(
+            command,
+            (
+                "export PYTHONPATH='/container/vllm source:"
+                "/container/vllm-ascend'\"${PYTHONPATH:+:${PYTHONPATH}}\"; "
+                "setsid bash /scripts/test.sh"
+            ),
+        )
+        self.assertLess(command.index("export PYTHONPATH"), command.index("setsid"))
+
+    def test_source_pythonpath_falls_back_to_existing_model_paths(self):
+        command = ssh_utils.build_source_pythonpath_command(
+            "python3 -c 'import vllm'",
+            {
+                "vllm_source": "/source/vllm",
+                "vllm_ascend_source": "/source/vllm-ascend",
+            },
+        )
+
+        self.assertIn(
+            'export PYTHONPATH=/source/vllm:/source/vllm-ascend"',
+            command,
+        )
+
     def test_resolve_node_keeps_env_and_merges_docker_defaults(self):
         config = {
             "docker": {
@@ -196,6 +231,63 @@ class ServiceEnvironmentTests(unittest.TestCase):
                 "-c",
                 "env",
             ],
+        )
+
+    def test_docker_exec_can_inject_source_pythonpath_on_request(self):
+        node = {
+            "env_vars": {},
+            "docker": {
+                "name": "service-container",
+                "work_dir": "/service",
+            },
+        }
+        model = {
+            "vllm_source": "/source/vllm",
+            "vllm_ascend_source": "/source/vllm-ascend",
+        }
+        with (
+            patch.object(ssh_utils, "resolve_node", return_value=node),
+            patch.object(ssh_utils, "load_model_config", return_value=model),
+            patch.object(
+                ssh_utils,
+                "exec_command",
+                return_value={"success": True},
+            ) as execute,
+        ):
+            ssh_utils.docker_exec_command(
+                "standalone",
+                "setsid bash /scripts/test.sh",
+                source_pythonpath=True,
+            )
+
+        container_command = shlex.split(execute.call_args.args[1])[-1]
+        self.assertTrue(container_command.startswith("export PYTHONPATH="))
+        self.assertTrue(container_command.endswith("setsid bash /scripts/test.sh"))
+
+    def test_docker_exec_cli_accepts_source_pythonpath_before_command(self):
+        argv = [
+            "ssh_utils.py",
+            "docker-exec",
+            "standalone",
+            "--source-pythonpath",
+            "setsid bash /scripts/test.sh",
+        ]
+        with (
+            patch.object(sys, "argv", argv),
+            patch.object(
+                ssh_utils,
+                "docker_exec_command",
+                return_value={"success": True},
+            ) as execute,
+            redirect_stdout(io.StringIO()),
+        ):
+            ssh_utils.main()
+
+        execute.assert_called_once_with(
+            "standalone",
+            "setsid bash /scripts/test.sh",
+            600,
+            source_pythonpath=True,
         )
 
     def test_host_exec_starts_in_node_work_dir_and_reports_context(self):

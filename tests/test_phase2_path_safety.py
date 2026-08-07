@@ -352,7 +352,7 @@ class PathPolicyTests(unittest.TestCase):
         self.assertIn("不得在容器内执行 `fuser`", workflow)
         self.assertIn("不要先做额外端口探测", workflow)
         self.assertIn(
-            'docker-exec standalone "setsid bash {docker.startup_script}',
+            'docker-exec standalone --source-pythonpath "setsid bash {docker.startup_script}',
             workflow,
         )
         self.assertIn(

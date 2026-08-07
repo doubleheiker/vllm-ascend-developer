@@ -100,7 +100,6 @@ class BaselineCapabilityTests(unittest.TestCase):
 class KnownGapContractTests(unittest.TestCase):
     """Expected failures that later rounds must replace with passing tests."""
 
-    @unittest.expectedFailure
     def test_python_import_path_preflight_is_implemented(self):
         service_config = (
             ROOT / "config" / "service.yaml"

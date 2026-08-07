@@ -92,6 +92,11 @@ class PythonImportPreflightTests(unittest.TestCase):
         command = self.ssh_utils.docker_exec_command.call_args.args[1]
         self.assertIn("/usr/bin/python3", command)
         self.assertIn("/source/vllm-ascend", command)
+        self.assertTrue(
+            self.ssh_utils.docker_exec_command.call_args.kwargs[
+                "source_pythonpath"
+            ]
+        )
 
     def test_malformed_probe_output_fails_without_install_or_retry(self):
         self.ssh_utils.resolve_node = Mock(
@@ -127,6 +132,8 @@ class PythonImportPreflightTests(unittest.TestCase):
         self.assertIn("scripts/preflight.py", workflow)
         self.assertNotIn("pip show {model.pip_package}", workflow)
         self.assertIn("preflight.import_ready", service)
+        self.assertIn("--source-pythonpath", service)
+        self.assertIn("脚本内部显式设置的同名环境变量仍然优先", service)
         self.assertIn("preflight.py", skill)
 
         spec = importlib.util.spec_from_file_location(

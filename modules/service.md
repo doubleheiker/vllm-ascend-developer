@@ -21,7 +21,7 @@
 
 ## 步骤 0：容器 Python 导入检查
 
-每个新诊断工作流在启动服务前，对本次使用的每个节点执行一次只读检查。该脚本复用 `ssh_utils.py` 的 `docker-exec`，不会安装包、修改源码或写入远程文件：
+每个新诊断工作流在启动服务前，对本次使用的每个节点执行一次只读检查。该脚本复用 `ssh_utils.py` 的 `docker-exec --source-pythonpath`，先将配置的容器源码路径置于现有 `PYTHONPATH` 前方，再检查实际导入来源；它不会安装包、修改源码或写入远程文件：
 
 ```bash
 # 单机模式
@@ -36,7 +36,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/preflight.py" --project-root "${CLAUDE_PR
 
 - 外层 `success: false` 或缺少 `preflight`：停止并报告原始结果，不重试、不读取工具源码猜测原因。
 - `preflight.import_ready: false`：停止启动，直接报告 `imports` 中的导入错误；禁止自动执行 `pip install`。
-- `source_match: false` 或预期源码目录 `exists: false`：记录实际 `__file__`、`PYTHONPATH` 和 `sys.path` 作为路径偏差证据。本轮只报告，不自动修改启动环境。
+- 任一 `source_match: false` 或预期源码目录 `exists: false`：停止启动，报告实际 `__file__`、`PYTHONPATH` 和 `sys.path`；不要退回 site-packages 继续运行。
 - 已在当前工作流成功检查过的节点直接复用结果，不要在同一轮启动/重启时重复检查。
 
 ---
@@ -76,10 +76,10 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "rm 
 ### 步骤 2：启动服务
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone "setsid bash {docker.startup_script} > {docker.log_file} 2>&1 & echo \$! > {docker.work_dir}/vllm.pid"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec standalone --source-pythonpath "setsid bash {docker.startup_script} > {docker.log_file} 2>&1 & echo \$! > {docker.work_dir}/vllm.pid"
 ```
 
-`setsid` 让启动脚本及其 vLLM 子进程进入独立进程组；PID 文件记录该进程组组长，供停止流程使用。
+`--source-pythonpath` 根据 `model.yaml` 自动把 vLLM、vLLM-Ascend 容器源码目录放在原有 `PYTHONPATH` 前方，不需要 Agent 拼接路径。随后才执行启动脚本，因此脚本内部显式设置的同名环境变量仍然优先。`setsid` 和 PID 文件行为保持不变。
 
 ### 步骤 3：监控日志等待启动
 
@@ -148,11 +148,11 @@ P 节点和 D 节点分别启动各自的 proxy + vLLM 服务：
 ```bash
 # P 节点启动
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.p[0] "nohup bash {docker.proxy_script} > {docker.log_file} 2>&1 &"
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.p[0] "nohup bash {docker.startup_script} > {docker.log_file} 2>&1 &"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.p[0] --source-pythonpath "nohup bash {docker.startup_script} > {docker.log_file} 2>&1 &"
 
 # D 节点同理
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.d[0] "nohup bash {docker.proxy_script} > {docker.log_file} 2>&1 &"
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.d[0] "nohup bash {docker.startup_script} > {docker.log_file} 2>&1 &"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ssh_utils.py" docker-exec pd-separated.d[0] --source-pythonpath "nohup bash {docker.startup_script} > {docker.log_file} 2>&1 &"
 ```
 
 ### 步骤 3-5：监控、检查、健康检查

@@ -8,6 +8,7 @@ vllm-ascend-developer SSH 工具 — 基于 service.yaml 的远程执行模块�
 - 密码通过 Paramiko 内存传递，不暴露在命令行
 - 支持 exec / docker-exec / upload / download / wait / status / stop
 - docker-exec 从节点配置注入 env_vars，并合并节点级/全局 Docker 配置
+- docker-exec 可按需把容器源码目录置于 PYTHONPATH 最前方
 - exec 与 docker-exec 分别从节点 work_dir 与 docker.work_dir 开始执行
 
 用法：
@@ -659,13 +660,62 @@ def build_docker_exec_command(node, command):
     return " ".join(shlex.quote(part) for part in argv)
 
 
-def docker_exec_command(node_ref, command, timeout=600):
+def _require_container_source_path(model, container_key, fallback_key):
+    """读取容器源码路径；未单独配置时复用已有源码路径。"""
+    value = model.get(container_key) or model.get(fallback_key)
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or value.startswith("<")
+        or not PurePosixPath(value).is_absolute()
+        or value == "/"
+    ):
+        die(
+            f"model.yaml 的 {container_key}（或 {fallback_key}）"
+            "必须是容器内绝对源码路径"
+        )
+    return value.rstrip("/")
+
+
+def build_source_pythonpath_command(command, model=None):
+    """在容器命令前注入源码 PYTHONPATH，并保留已有 PYTHONPATH。"""
+    if not isinstance(command, str) or not command.strip():
+        die("源码 PYTHONPATH 注入的容器命令不能为空")
+    model = model if model is not None else load_model_config()
+    paths = [
+        _require_container_source_path(
+            model,
+            "container_vllm_source",
+            "vllm_source",
+        ),
+        _require_container_source_path(
+            model,
+            "container_vllm_ascend_source",
+            "vllm_ascend_source",
+        ),
+    ]
+    source_pythonpath = ":".join(dict.fromkeys(paths))
+    return (
+        f"export PYTHONPATH={shlex.quote(source_pythonpath)}"
+        '"${PYTHONPATH:+:${PYTHONPATH}}"; '
+        f"{command}"
+    )
+
+
+def docker_exec_command(
+    node_ref,
+    command,
+    timeout=600,
+    source_pythonpath=False,
+):
     """在节点容器中执行命令，并注入 service.yaml 的 env_vars。"""
     node = resolve_node(node_ref)
     work_dir = _require_remote_work_dir(
         (node.get("docker") or {}).get("work_dir"),
         "docker.work_dir",
     )
+    if source_pythonpath:
+        command = build_source_pythonpath_command(command)
     host_command = build_docker_exec_command(node, command)
     response = exec_command(node_ref, host_command, timeout)
     return _with_execution_context(
@@ -861,6 +911,11 @@ def main():
         default=600,
         help="超时秒数，默认 600（10分钟）",
     )
+    p_docker_exec.add_argument(
+        "--source-pythonpath",
+        action="store_true",
+        help="将 model.yaml 中的容器源码路径置于 PYTHONPATH 最前方",
+    )
 
     # status
     p_status = sub.add_parser("status", help="查看 daemon 状态")
@@ -928,6 +983,7 @@ def main():
                     args.node_ref,
                     args.command,
                     args.timeout,
+                    source_pythonpath=args.source_pythonpath,
                 )
             )
         elif args.action == "status":

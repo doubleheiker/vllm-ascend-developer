@@ -23,6 +23,7 @@
 # ===== Docker 字段说明 =====
 #   name:            容器名称
 #   work_dir:        容器内工作目录；docker-exec 默认以此为 cwd
+#   container_python: 容器内 Python 命令或绝对路径，默认 python3
 #   startup_script:  vLLM 服务启动脚本路径
 #   proxy_script:    proxy 启动脚本路径
 #                    - standalone: 可选，分布式 DP 场景必配
@@ -51,6 +52,7 @@ mode: "standalone"  # "standalone" | "pd-separated"
 docker:
   name: "vllm-ascend-dev"                                            # 容器名称
   work_dir: "/home/user/workspace"                                  # 容器内工作目录
+  container_python: "python3"                                        # preflight 使用的容器 Python
   startup_script: "/home/user/vllm-ascend/examples/test.sh"         # 启动脚本路径
   proxy_script: ""                                                     # proxy 启动脚本路径（standalone可选，PD分离必配）
   proxy_port: ""                                                       # proxy 监听端口（配置后按此端口杀 proxy）
